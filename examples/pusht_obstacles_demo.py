@@ -3,7 +3,7 @@ import time
 
 import gymnasium as gym
 
-import pusht_w_obstacles  # noqa: F401 - register env
+import envs  # noqa: F401 - register env
 from planning_wrapper.adapters import PushTTaskAdapter
 from planning_wrapper.wrappers.maniskill_planning import ManiSkillPlanningWrapper
 
