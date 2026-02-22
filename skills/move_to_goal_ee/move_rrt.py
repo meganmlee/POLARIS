@@ -238,7 +238,7 @@ def run_eval(args):
             successes.append(False); final_dists.append(float("inf")); plan_times.append(0.0)
             continue
 
-        planner = RRT(q_start, q_goal,
+        planner = RRTStar(q_start, q_goal,
                       max_iter=args.max_iter,
                       step_size=args.step_size,
                       goal_sample_rate=args.goal_sample_rate,
