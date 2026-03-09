@@ -7,8 +7,8 @@ L-BFGS-B — no external kinematics library required.
 Control: pd_joint_pos (absolute joint position setpoints).
 
 Usage:
-    python skills/move_to_goal_ee/move_rrt.py
-    python skills/move_to_goal_ee/move_rrt.py --num_episodes 20 --seed 42
+    python skills/reach/reach_rrt.py
+    python skills/reach/reach_rrt.py --num_episodes 20 --seed 42
 """
 from __future__ import annotations
 

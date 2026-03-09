@@ -1,22 +1,25 @@
 """
-Visualize the trained PPO policy for PushCube-v1.
+Visualize the trained PPO policy for PushCube-WithObstacles-v1.
 
 Loads a checkpoint from push_cube_ppo.py and runs a single episode
 with live rendering.
 
 Run:
     python examples/push_cube_ppo_demo.py
-    python examples/push_cube_ppo_demo.py --checkpoint runs/PushCube-v1__1__1771789822/final_ckpt.pt
+    python examples/push_cube_ppo_demo.py --checkpoint runs/PushCube-WithObstacles-v1__1__<timestamp>/final_ckpt.pt
 """
 
 import argparse
 import sys
+import os
 import time
 import types
 from pathlib import Path
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 import gymnasium as gym
-import mani_skill.envs  # noqa: F401 — registers PushCube-v1
+import envs  # noqa: F401 — registers PushCube-WithObstacles-v1
 import numpy as np
 import torch
 
@@ -27,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "push_cube"))
 from push_cube_ppo import Agent  # noqa: E402
 
 
-DEFAULT_CHECKPOINT = "runs/PushCube-v1__1__1771789822/final_ckpt.pt"
+DEFAULT_CHECKPOINT = "runs/PushCube-WithObstacles-v1__1__<timestamp>/final_ckpt.pt"
 MAX_STEPS = 200
 
 
@@ -45,7 +48,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     env = gym.make(
-        "PushCube-v1",
+        "PushCube-WithObstacles-v1",
         obs_mode="state",
         control_mode="pd_ee_delta_pos",
         render_mode="human",
