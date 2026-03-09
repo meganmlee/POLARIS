@@ -1,6 +1,6 @@
 # POLARIS
 
-POLARIS is a robot manipulation framework that combines LLM-based task decomposition with an adaptive skill library. Long-horizon tasks are broken into subgoals by an LLM, which compresses the simulation state into a PDDL representation of object states and constraints. For each subgoal, a **Policy Assignment** module selects the most efficient execution method — classical motion planning (RRT*) or a learned RL policy (PPO) — and retries with reassignment on failure.
+POLARIS (Policy Assignment for Robust Intent-Driven Skill Execution) is a robot manipulation framework that combines LLM-based task decomposition with an adaptive skill library. Long-horizon tasks are broken into subgoals by an LLM, which compresses the simulation state into a PDDL representation of object states and constraints. For each subgoal, a **Policy Assignment** module selects the most efficient execution method — classical motion planning (RRT*) or a learned RL policy (PPO) — and retries with reassignment on failure.
 
 ## System Components
 
@@ -20,8 +20,9 @@ Each skill has multiple backends sharing the same environment, so methods are di
 |---|---|---|---|
 | Reach | RRT* (`reach_rrt.py`) | PPO (`reach_ppo.py`) | `MoveGoal-WithObstacles-v1` |
 | Push Cube | RRT (`push_cube_rrt.py`) | PPO (`push_cube_ppo.py`) | `PushCube-WithObstacles-v1` |
+| Pick | — | — | — |
+| Place | — | — | — |
 | Push T | — | — | `PushT-WithObstacles-v1` |
-| Shelf Retrieve | — | — | `ObjectRetrieveFromShelf-v1` |
 
 ## Project Structure
 
@@ -123,26 +124,28 @@ All environments are in [envs/](envs/) and registered on `import envs`. RL and p
 
 ## Training & Evaluation
 
-### Learned Backend (PPO)
+### Learned Skills (PPO)
 
 ```bash
 # Train
-python skills/reach/reach_ppo.py
-python skills/push_cube/push_cube_ppo.py
+cd skills/<skill>
+python reach_ppo.py
+python push_cube_ppo.py
 
 # With options
-python skills/push_cube/push_cube_ppo.py \
+python push_cube_ppo.py \
     --num_envs 512 \
     --total_timesteps 10_000_000 \
     --seed 42
 
 # Evaluate a checkpoint
-python skills/push_cube/push_cube_ppo.py \
+python push_cube_ppo.py \
     --evaluate \
     --checkpoint runs/PushCube-WithObstacles-v1__1__<timestamp>/final_ckpt.pt
 ```
+![Evaluation will produce videos](image.png)
 
-### Classical Backend (RRT)
+### Classical Skills
 
 No training required.
 
@@ -157,8 +160,9 @@ python skills/push_cube/push_cube_rrt.py
 ```bash
 # Reach
 python examples/reach_demo.py        # proportional controller baseline
-python examples/reach_ppo_demo.py    # PPO policy
+python examples/reach_ppo_demo.py --checkpoint runs/<run>/final_ckpt.pt  # PPO policy
 python examples/reach_rrt_demo.py    # RRT* planner
+python examples/reach_ppo_demo.py --checkpoint runs/<run>/final_ckpt.pt --seed 10 # change seed randomization (default 5)
 
 # PushCube
 python examples/push_cube_ppo_demo.py
@@ -189,12 +193,6 @@ wrapper.restore_state(snapshot)    # backtrack
 
 Available adapters: `PushTTaskAdapter`, `ShelfRetrieveTaskAdapter`.
 
-## Testing
-
-```bash
-pytest tests/
-```
-
 ## Requirements
 
 - Python 3.11
@@ -203,3 +201,8 @@ pytest tests/
 - Pinocchio (via conda)
 
 See [requirements.txt](requirements.txt) for the full dependency list.
+
+## Contributors
+Megan Lee
+Tom Gao
+Abhishek Mathur
