@@ -3,6 +3,7 @@ import numpy as np
 import sapien
 import torch
 import mani_skill.envs  # noqa: F401
+from mani_skill.agents.robots import Panda
 from mani_skill.envs.tasks.tabletop.push_t import PushTEnv
 from mani_skill.sensors.camera import CameraConfig
 from mani_skill.utils import sapien_utils
@@ -14,6 +15,12 @@ from mani_skill.utils.structs import Pose
 @register_env("PushT-WithObstacles-v1", max_episode_steps=200)
 class PushTWithObstaclesEnv(PushTEnv):
     """PushT with multiple obstacle cubes of different sizes on the table."""
+
+    SUPPORTED_ROBOTS = ["panda_stick", "panda"]
+    agent: Panda
+
+    def __init__(self, *args, robot_uids="panda", **kwargs):
+        super().__init__(*args, robot_uids=robot_uids, **kwargs)
 
     # (half_size, rgba) for each obstacle
     OBSTACLE_SPECS = [
