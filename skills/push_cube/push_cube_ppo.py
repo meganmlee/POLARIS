@@ -26,6 +26,9 @@ from torch.distributions import Normal
 from torch.utils.tensorboard import SummaryWriter
 
 import mani_skill.envs
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+import envs  # noqa: F401 — registers PushCube-WithObstacles-v1
 from mani_skill.utils.wrappers.flatten import FlattenActionSpaceWrapper
 from mani_skill.utils.wrappers.record import RecordEpisode
 from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
@@ -37,7 +40,7 @@ class Args:
     seed: int = 1
     cuda: bool = True
 
-    env_id: str = "PushCube-v1"
+    env_id: str = "PushCube-WithObstacles-v1"
     obs_mode: str = "state"
     # pd_ee_delta_pos: move EE in XYZ — well suited for a pushing task
     # (simpler action space than full joint control for contact-rich tasks)
