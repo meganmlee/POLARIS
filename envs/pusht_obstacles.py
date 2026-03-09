@@ -117,38 +117,26 @@ class MoveGoalWithObstaclesEnv(PushTWithObstaclesEnv):
 
 @register_env("PushCube-WithObstacles-v1", max_episode_steps=200)
 class PushCubeWithObstaclesEnv(PushTWithObstaclesEnv):
-    """Push a red cube to a goal position on the table. Same scene as PushT-WithObstacles.
+    """Push a randomly selected obstacle cube to a goal position on the table.
 
-    Observation extras: ee_pos (3,), cube_pos (3,), goal_pos (3,),
-                        ee_to_cube (3,), cube_to_goal (3,)
-    Success: cube XY within 5 cm of goal XY.
+    Each episode a different obstacle is chosen as the push target.
+    Observation extras: ee_pos (3,), goal_cube_pos (3,), goal_pos (3,),
+                        ee_to_goal_cube (3,), goal_cube_to_goal (3,)
+    Success: goal cube XY within 5 cm of goal XY.
     """
 
-    PUSH_CUBE_HALF_SIZE = 0.02
     GOAL_THRESHOLD = 0.05
-
-    def _load_scene(self, options: dict):
-        super()._load_scene(options)
-        self.push_cube = actors.build_cube(
-            self.scene,
-            half_size=self.PUSH_CUBE_HALF_SIZE,
-            color=np.array([0.8, 0.1, 0.1, 1.0], dtype=np.float32),
-            name="push_cube",
-            body_type="dynamic",
-            initial_pose=sapien.Pose(p=[0.0, 0.0, self.PUSH_CUBE_HALF_SIZE]),
-        )
 
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         super()._initialize_episode(env_idx, options)
         with torch.device(self.device):
             b = len(env_idx)
-            q = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).expand(b, 4)
 
-            # Place push cube randomly near table centre
-            cube_xy = (torch.rand((b, 2), device=self.device) * 2 - 1) * 0.10
-            cube_z  = torch.full((b, 1), self.PUSH_CUBE_HALF_SIZE, device=self.device)
-            self.push_cube.set_pose(Pose.create_from_pq(
-                p=torch.cat([cube_xy, cube_z], dim=1), q=q))
+            # Randomly pick which obstacle is the push target for each env
+            if not hasattr(self, "goal_obstacle_idx") or self.goal_obstacle_idx.shape[0] != self.num_envs:
+                self.goal_obstacle_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+            self.goal_obstacle_idx[env_idx] = torch.randint(
+                len(self.obstacles), (b,), device=self.device)
 
             # Sample goal XY on table surface (stored as 3-D with z=0)
             goal_xy = (torch.rand((b, 2), device=self.device) * 2 - 1) * 0.15
@@ -157,26 +145,32 @@ class PushCubeWithObstaclesEnv(PushTWithObstaclesEnv):
             self.goal_pos[env_idx] = torch.cat(
                 [goal_xy, torch.zeros((b, 1), device=self.device)], dim=1)
 
+    def _get_goal_cube_pos(self) -> torch.Tensor:
+        """Position of the selected goal obstacle for each env. Shape: (num_envs, 3)."""
+        # (num_obstacles, num_envs, 3) → index per env
+        all_pos = torch.stack([obs.pose.p for obs in self.obstacles], dim=0)
+        return all_pos[self.goal_obstacle_idx, torch.arange(self.num_envs, device=self.device)]
+
     def evaluate(self, **kwargs):
-        cube_xy = self.push_cube.pose.p[:, :2]
-        dist    = torch.norm(cube_xy - self.goal_pos[:, :2], dim=1)
+        goal_cube_pos = self._get_goal_cube_pos()
+        dist = torch.norm(goal_cube_pos[:, :2] - self.goal_pos[:, :2], dim=1)
         return {"success": dist < self.GOAL_THRESHOLD, "dist_cube_to_goal": dist}
 
     def _get_obs_extra(self, info):
-        ee_pos   = self.agent.tcp.pose.p
-        cube_pos = self.push_cube.pose.p
+        ee_pos        = self.agent.tcp.pose.p
+        goal_cube_pos = self._get_goal_cube_pos()
         return {
-            "ee_pos":       ee_pos,
-            "cube_pos":     cube_pos,
-            "goal_pos":     self.goal_pos,
-            "ee_to_cube":   cube_pos - ee_pos,
-            "cube_to_goal": self.goal_pos - cube_pos,
+            "ee_pos":            ee_pos,
+            "goal_cube_pos":     goal_cube_pos,
+            "goal_pos":          self.goal_pos,
+            "ee_to_goal_cube":   goal_cube_pos - ee_pos,
+            "goal_cube_to_goal": self.goal_pos - goal_cube_pos,
         }
 
     def compute_dense_reward(self, obs, action, info):
-        ee_pos   = self.agent.tcp.pose.p
-        cube_pos = self.push_cube.pose.p
-        reach_reward  = 1.0 - torch.tanh(5.0 * torch.norm(ee_pos - cube_pos, dim=1))
+        ee_pos        = self.agent.tcp.pose.p
+        goal_cube_pos = self._get_goal_cube_pos()
+        reach_reward  = 1.0 - torch.tanh(5.0 * torch.norm(ee_pos - goal_cube_pos, dim=1))
         push_reward   = 1.0 - torch.tanh(5.0 * info["dist_cube_to_goal"])
         success_bonus = info["success"].float() * 5.0
         return reach_reward + push_reward + success_bonus
