@@ -11,10 +11,10 @@ Success criteria: ee < 2cm from goal
 Usage:
 
 Run training:
-    python move_ppo.py
+    python reach_ppo.py
 
 Evaluate:
-    python move_ppo.py --evaluate --checkpoint runs/<run>/final_ckpt.pt
+    python reach_ppo.py --evaluate --checkpoint runs/<run>/final_ckpt.pt
 '''
 from __future__ import annotations
 
@@ -37,6 +37,8 @@ from mani_skill.utils.wrappers.flatten import FlattenActionSpaceWrapper
 from mani_skill.utils.wrappers.record import RecordEpisode
 from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
 
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs
 
 
@@ -46,7 +48,7 @@ class Args:
     seed: int = 1
     cuda: bool = True
 
-    env_id: str = "ReachGoal"
+    env_id: str = "MoveGoal-WithObstacles-v1"
     obs_mode: str = "state"
     control_mode: str = "pd_ee_delta_pose"
     num_envs: int = 512

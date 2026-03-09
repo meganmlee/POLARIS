@@ -5,7 +5,7 @@ Runs a single episode using numerical IK and RRT* planning
 with live rendering.
 
 Run:
-    python examples/reach_goal_rrt_demo.py
+    python examples/reach_rrt_demo.py
 """
 
 import argparse
@@ -17,11 +17,11 @@ import gymnasium as gym
 import numpy as np
 import torch
 
-import envs  # noqa: F401 — registers ReachGoal
+import envs  # noqa: F401 — registers MoveGoal-WithObstacles-v1
 
-# Import Planner and utils from move_rrt
-sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "move_to_goal_ee"))
-from move_rrt import RRTStar, solve_ik, smooth_path_spline # noqa: E402
+# Import Planner and utils from reach_rrt
+sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "reach"))
+from reach_rrt import RRTStar, solve_ik, smooth_path_spline # noqa: E402
 
 
 def main():

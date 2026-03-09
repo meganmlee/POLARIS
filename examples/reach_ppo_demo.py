@@ -1,19 +1,22 @@
 """
-Visualize the trained PPO policy for ReachGoal.
+Visualize the trained PPO policy for MoveGoal-WithObstacles-v1.
 
-Loads the final checkpoint from move_ppo.py and runs a single episode
+Loads the final checkpoint from reach_ppo.py and runs a single episode
 with live rendering.
 
 Run:
-    python examples/reach_goal_ppo_demo.py
-    python examples/reach_goal_ppo_demo.py --checkpoint runs/ReachGoal__1__1771789269/final_ckpt.pt
+    python examples/reach_ppo_demo.py
+    python examples/reach_ppo_demo.py --checkpoint runs/MoveGoal-WithObstacles-v1__1__<timestamp>/final_ckpt.pt
 """
 
 import argparse
 import sys
+import os
 import time
 import types
 from pathlib import Path
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import gymnasium as gym
 import numpy as np
@@ -21,14 +24,14 @@ import torch
 
 from mani_skill.utils.wrappers.flatten import FlattenActionSpaceWrapper
 
-import envs  # noqa: F401 — registers ReachGoal
+import envs  # noqa: F401 — registers MoveGoal-WithObstacles-v1
 
-# Import Agent from move_ppo without running its __main__ block
-sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "move_to_goal_ee"))
-from move_ppo import Agent  # noqa: E402
+# Import Agent from reach_ppo without running its __main__ block
+sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "reach"))
+from reach_ppo import Agent  # noqa: E402
 
 
-DEFAULT_CHECKPOINT = "runs/ReachGoal__1__1771789269/final_ckpt.pt"
+DEFAULT_CHECKPOINT = "runs/MoveGoal-WithObstacles-v1__1__<timestamp>/final_ckpt.pt"
 MAX_STEPS = 200
 
 
@@ -46,7 +49,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     env = gym.make(
-        "ReachGoal",
+        "MoveGoal-WithObstacles-v1",
         obs_mode="state",
         control_mode="pd_ee_delta_pose",
         render_mode="human",
