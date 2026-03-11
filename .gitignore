@@ -32,6 +32,9 @@ ENV/
 *.swo
 *~
 
+# API keys (do not commit)
+config.json
+
 # OS
 .DS_Store
 Thumbs.db

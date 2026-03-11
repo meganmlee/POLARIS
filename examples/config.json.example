@@ -1,0 +1,4 @@
+{
+  "VERTEX_PROJECT": "your-gcp-project-id",
+  "VERTEX_LOCATION": "us-central1"
+}
