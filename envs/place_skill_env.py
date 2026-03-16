@@ -91,12 +91,14 @@ class PlaceSkillEnv(BaseEnv):
             self, robot_init_qpos_noise=self.robot_init_qpos_noise
         )
         self.table_scene.build()
+
+        # This is the cube we will be placing, which will initially be at default pose but teleported into the gripper at episode start
         self.cube = actors.build_cube(
             self.scene,
             half_size=self.cube_half_size,
             color=[1, 0, 0, 1],
             name="cube",
-            initial_pose=sapien.Pose(p=[0, 0, self.cube_half_size]),
+            initial_pose=sapien.Pose(),
         )
         self.goal_site = actors.build_sphere(
             self.scene,
@@ -112,29 +114,22 @@ class PlaceSkillEnv(BaseEnv):
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         with torch.device(self.device):
             b = len(env_idx)
-
-            # 1. Reset table scene to default home configuration
             self.table_scene.initialize(env_idx)
-
-            # 2. Apply small noise to arm joints; close fingers firmly on cube.
-            #    Panda DOF: 9 = 7 arm + 2 finger.
-            #    Finger qpos = cube_half_size - margin creates slight interpenetration
-            #    that the physics engine resolves into a stable contact grasp.
+            
+            # Sample and apply a small random noise to the arm joints for the initial pose
             current_qpos = self.agent.robot.get_qpos()[env_idx]  # (b, 9)
             arm_noise = (torch.rand((b, 7)) * 2 - 1) * self.qpos_noise
+            
             finger_val = self.cube_half_size - self.finger_grip_margin
-            finger_qpos = torch.full((b, 2), finger_val)
+            finger_qpos = torch.full((b, 2), finger_val, device=self.device)
+            
             new_qpos = torch.cat([current_qpos[:, :7] + arm_noise, finger_qpos], dim=1)
+
+            # Apply the noisy qpos
             self.agent.robot.set_qpos(new_qpos)
             self.agent.robot.set_qvel(torch.zeros_like(new_qpos))
 
-            # 3. Spawn cube at the TCP position — FK is updated after set_qpos.
-            #    A random yaw is applied so the cube orientation varies slightly.
-            tcp_pos = self.agent.tcp_pose.p[env_idx]  # (b, 3)
-            qs = randomization.random_quaternions(b, lock_x=True, lock_y=True)
-            self.cube.set_pose(Pose.create_from_pq(tcp_pos, qs))
-
-            # 4. Sample a random goal position on the table surface.
+            # Sample a random goal position on the table surface.
             goal_xy = (torch.rand((b, 2)) * 2 - 1) * self.goal_spawn_half_size
             goal_xyz = torch.zeros((b, 3))
             goal_xyz[:, :2] = goal_xy
@@ -142,9 +137,29 @@ class PlaceSkillEnv(BaseEnv):
             if not hasattr(self, "goal_pos") or self.goal_pos.shape[0] != self.num_envs:
                 self.goal_pos = torch.zeros((self.num_envs, 3), device=self.device)
             self.goal_pos[env_idx] = goal_xyz
+
+            # cube_placed per each environment is false at the start, until the cube is correctly teleported into grasp at evaluate().
+            if not hasattr(self, "cube_placed") or self.cube_placed.shape[0] != self.num_envs:
+                self.cube_placed = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+            self.cube_placed[env_idx] = False
             self.goal_site.set_pose(Pose.create_from_pq(goal_xyz))
 
     def evaluate(self) -> Dict[str, Any]:
+
+        # Teleport cube into gripper if it has not been placed yet (aka at start of episode)
+        cubes_require_placement = ~self.cube_placed  # (num_envs,) bool
+        if cubes_require_placement.any():
+            # gpu fetch/apply calls needed to actually update the cube pose.
+            if self.gpu_sim_enabled:
+                self.scene._gpu_fetch_all()
+            new_raw = self.cube.pose.raw_pose.clone()       # (N, 7)
+            new_raw[cubes_require_placement] = self.agent.tcp_pose.raw_pose[cubes_require_placement]
+            self.cube.set_pose(Pose.create_from_pq(new_raw[:, :3], new_raw[:, 3:]))
+            if self.gpu_sim_enabled:
+                self.scene._gpu_apply_all()
+                self.scene._gpu_fetch_all() # Avoid assertion error by calling fetch after apply
+            self.cube_placed[cubes_require_placement] = True
+
         is_grasped = self.agent.is_grasping(self.cube)
         cube_pos = self.cube.pose.p  # (N, 3)
         tcp_pos = self.agent.tcp_pose.p  # (N, 3)
@@ -161,6 +176,8 @@ class PlaceSkillEnv(BaseEnv):
         # EE must have retreated from the cube
         tcp_to_obj_dist = torch.linalg.norm(tcp_pos - cube_pos, dim=1)
         is_retreated = tcp_to_obj_dist > self.retreat_dist
+
+        # print(f"Grasped: {is_grasped.cpu().numpy()}, Placed: {is_placed.cpu().numpy()}, Retreated: {is_retreated.cpu().numpy()}, Obj-Goal Dist: {obj_to_goal_dist.cpu().numpy()}")
 
         return {
             "success": is_placed & is_retreated,
@@ -186,13 +203,17 @@ class PlaceSkillEnv(BaseEnv):
 
     def compute_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
         is_grasped = info["is_grasped"].float()
-
-        # Reward 1: move cube toward goal while grasped
         obj_to_goal_dist = info["obj_to_goal_dist"]
-        place_reward = 1 - torch.tanh(5 * obj_to_goal_dist)
-        reward = place_reward * is_grasped
 
-        # Reward 2: once placed, encourage EE to retreat
+        # Reward 1: always reward cube proximity to goal
+        place_reward = 1 - torch.tanh(5 * obj_to_goal_dist)
+        reward = place_reward
+
+        # Reward 2: when cube is near goal, explicitly reward opening the fingers.
+        near_goal = (obj_to_goal_dist < self.place_thresh * 2).float()
+        reward += near_goal * (1.0 - is_grasped)
+
+        # Reward 3: once cube is placed (released + at goal + on table), reward retreat
         tcp_to_obj_dist = torch.linalg.norm(
             self.agent.tcp_pose.p - self.cube.pose.p, dim=1
         )
@@ -206,11 +227,11 @@ class PlaceSkillEnv(BaseEnv):
         return reward
 
     def compute_normalized_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
-        # Max achievable reward ≈ 5 (terminal bonus)
-        return self.compute_dense_reward(obs=obs, action=action, info=info) / 5.0
+        return self.compute_dense_reward(obs=obs, action=action, info=info) / 8.0
 
     @property
     def _default_human_render_camera_configs(self):
-        pose = sapien_utils.look_at(eye=[0.3, 0, 0.6], target=[-0.1, 0, 0.1])
+        pose = sapien_utils.look_at(eye=[0.6, 0, 1], target=[-0.1, 0, 0.1])
         return CameraConfig("render_camera", pose=pose, width=512, height=512,
                             fov=1, near=0.01, far=100)
+
