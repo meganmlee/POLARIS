@@ -1,5 +1,9 @@
 """
-Skill: reach a goal EE position using RRT* in 7-DOF joint space.
+Skill: reach a goal EE position using RRT-Connect in 7-DOF joint space.
+
+RRT-Connect grows two trees simultaneously (one from start, one from goal)
+and is significantly faster and more reliable than RRT* for finding feasible
+paths in joint space.
 
 IK is solved numerically with the env's SAPIEN FK as an oracle + scipy
 L-BFGS-B — no external kinematics library required.
@@ -22,101 +26,124 @@ import torch
 from scipy.optimize import minimize
 from scipy.interpolate import CubicSpline
 
-import envs  # registers ReachGoal
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+import envs  # registers MoveGoal-WithObstacles-v1
 
 
 JOINT_LOWER = np.array([-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973])
 JOINT_UPPER = np.array([ 2.8973,  1.7628,  2.8973, -0.0698,  2.8973,  3.7525,  2.8973])
 
 
-class RRTStar:
-    """RRT* in 7-DOF joint space. Collision checking = joint limits only."""
+class RRTConnect:
+    """
+    Bidirectional RRT-Connect in 7-DOF joint space.
+
+    Collision checking: joint limits only.
+    """
 
     def __init__(
         self,
         q_start: np.ndarray,
         q_goal: np.ndarray,
-        max_iter: int = 1500,
-        step_size: float = 0.15,
-        goal_sample_rate: float = 0.10,
+        max_iter: int = 2000,
+        step_size: float = 0.10,
         goal_threshold: float = 0.05,
-        search_radius: float = 0.3,
     ):
-        self.q_goal           = q_goal.copy()
-        self.max_iter         = max_iter
-        self.step_size        = step_size
-        self.goal_sample_rate = goal_sample_rate
-        self.goal_threshold   = goal_threshold
-        self.search_radius    = search_radius
-        
-        self.nodes            = [q_start.copy()]
-        self.parents          = [-1]
-        self.costs            = [0.0]
+        self.q_start = q_start.copy()
+        self.q_goal  = q_goal.copy()
+        self.max_iter       = max_iter
+        self.step_size      = step_size
+        self.goal_threshold = goal_threshold
 
-    def _sample(self) -> np.ndarray:
-        if np.random.rand() < self.goal_sample_rate:
-            return self.q_goal.copy()
-        return np.random.uniform(JOINT_LOWER, JOINT_UPPER)
+        # Two trees: roots at q_start and q_goal respectively
+        self.nodes_s   = [q_start.copy()]
+        self.parents_s = [-1]
+        self.nodes_g   = [q_goal.copy()]
+        self.parents_g = [-1]
 
-    def _nearest(self, q: np.ndarray) -> int:
-        return int(np.argmin([np.linalg.norm(n - q) for n in self.nodes]))
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
-    def _near_indices(self, q: np.ndarray) -> list[int]:
-        return [i for i, n in enumerate(self.nodes) if np.linalg.norm(n - q) <= self.search_radius]
+    def _nearest(self, nodes: list, q: np.ndarray) -> int:
+        return int(np.argmin([np.linalg.norm(n - q) for n in nodes]))
 
     def _steer(self, q_from: np.ndarray, q_to: np.ndarray) -> np.ndarray:
         d = np.linalg.norm(q_to - q_from)
         return q_to.copy() if d <= self.step_size else q_from + (q_to - q_from) / d * self.step_size
 
-    def plan(self) -> list[np.ndarray]:
-        for _ in range(self.max_iter):
-            q_rand   = self._sample()
-            idx_near = self._nearest(q_rand)
-            q_new    = self._steer(self.nodes[idx_near], q_rand)
+    def _valid(self, q: np.ndarray) -> bool:
+        return bool(np.all((q >= JOINT_LOWER) & (q <= JOINT_UPPER)))
 
-            if not np.all((q_new >= JOINT_LOWER) & (q_new <= JOINT_UPPER)):
-                continue
+    def _extend(self, nodes: list, parents: list, q_target: np.ndarray):
+        """Single-step extension toward q_target. Returns (q_new, new_idx) or (None, -1)."""
+        idx   = self._nearest(nodes, q_target)
+        q_new = self._steer(nodes[idx], q_target)
+        if not self._valid(q_new):
+            return None, -1
+        nodes.append(q_new)
+        parents.append(idx)
+        return q_new, len(nodes) - 1
 
-            near_indices = self._near_indices(q_new)
-            
-            # Connect along a minimum-cost path
-            min_cost = self.costs[idx_near] + np.linalg.norm(q_new - self.nodes[idx_near])
-            min_cost_idx = idx_near
+    def _connect(self, nodes: list, parents: list, q_target: np.ndarray) -> bool:
+        """Greedily extend toward q_target until reached or blocked."""
+        while True:
+            q_new, _ = self._extend(nodes, parents, q_target)
+            if q_new is None:
+                return False
+            if np.linalg.norm(q_new - q_target) <= self.step_size:
+                return True
 
-            for idx in near_indices:
-                cost = self.costs[idx] + np.linalg.norm(q_new - self.nodes[idx])
-                if cost < min_cost:
-                    min_cost = cost
-                    min_cost_idx = idx
-
-            self.nodes.append(q_new)
-            self.parents.append(min_cost_idx)
-            self.costs.append(min_cost)
-            new_node_idx = len(self.nodes) - 1
-
-            # Rewire the tree
-            for idx in near_indices:
-                if idx == min_cost_idx:
-                    continue
-                rewired_cost = self.costs[new_node_idx] + np.linalg.norm(self.nodes[idx] - q_new)
-                if rewired_cost < self.costs[idx]:
-                    self.parents[idx] = new_node_idx
-                    self.costs[idx] = rewired_cost
-
-            if np.linalg.norm(q_new - self.q_goal) < self.goal_threshold:
-                return self._extract_path(len(self.nodes) - 1)
-
-        print("  [RRT*] max_iter reached — returning best partial path")
-        idx_best = min(range(len(self.nodes)), key=lambda i: np.linalg.norm(self.nodes[i] - self.q_goal))
-        return self._extract_path(idx_best)
-
-    def _extract_path(self, leaf: int) -> list[np.ndarray]:
-        path, idx = [], leaf
+    def _tree_path(self, nodes: list, parents: list, leaf_idx: int) -> list[np.ndarray]:
+        """Walk parent pointers from leaf to root, return root-to-leaf list."""
+        path, idx = [], leaf_idx
         while idx != -1:
-            path.append(self.nodes[idx].copy())
-            idx = self.parents[idx]
+            path.append(nodes[idx].copy())
+            idx = parents[idx]
         return path[::-1]
 
+    # ------------------------------------------------------------------
+    # Main planning loop
+    # ------------------------------------------------------------------
+
+    def plan(self) -> list[np.ndarray]:
+        """
+        Returns a list of joint-space waypoints from q_start to q_goal.
+        Falls back to the closest partial path if max_iter is exhausted.
+        """
+        for i in range(self.max_iter):
+            q_rand = np.random.uniform(JOINT_LOWER, JOINT_UPPER)
+
+            if i % 2 == 0:
+                # Extend start-tree, then try to connect goal-tree
+                q_new, idx_new = self._extend(self.nodes_s, self.parents_s, q_rand)
+                if q_new is None:
+                    continue
+                if self._connect(self.nodes_g, self.parents_g, q_new):
+                    path_s = self._tree_path(self.nodes_s, self.parents_s, idx_new)
+                    path_g = self._tree_path(self.nodes_g, self.parents_g, len(self.nodes_g) - 1)
+                    return path_s + path_g[::-1]
+            else:
+                # Extend goal-tree, then try to connect start-tree
+                q_new, idx_new = self._extend(self.nodes_g, self.parents_g, q_rand)
+                if q_new is None:
+                    continue
+                if self._connect(self.nodes_s, self.parents_s, q_new):
+                    path_s = self._tree_path(self.nodes_s, self.parents_s, len(self.nodes_s) - 1)
+                    path_g = self._tree_path(self.nodes_g, self.parents_g, idx_new)
+                    return path_s + path_g[::-1]
+
+        print("  [RRTConnect] max_iter reached — returning best partial path")
+        idx_best = min(range(len(self.nodes_s)),
+                       key=lambda i: np.linalg.norm(self.nodes_s[i] - self.q_goal))
+        return self._tree_path(self.nodes_s, self.parents_s, idx_best)
+
+
+# ---------------------------------------------------------------------------
+# Path utilities
+# ---------------------------------------------------------------------------
 
 def interpolate_path(path: list[np.ndarray], steps_per_segment: int = 15) -> np.ndarray:
     """Linear interpolation between RRT waypoints → dense (T, 7) trajectory."""
@@ -127,96 +154,99 @@ def interpolate_path(path: list[np.ndarray], steps_per_segment: int = 15) -> np.
     traj.append(path[-1])
     return np.array(traj)
 
+
 def smooth_path_spline(path: list[np.ndarray], num_points: int = 150) -> np.ndarray:
     """
-    Smooths an RRT* path using a Cubic Spline.
-    Ensures zero velocity at the start and end of the trajectory.
+    Smooth an RRT path with a clamped cubic spline (zero velocity at endpoints).
+    Returns a dense (num_points, 7) float32 trajectory clipped to joint limits.
     """
     if len(path) < 2:
         return np.array(path)
 
-    path_arr = np.array(path)  # Shape: (N, 7)
-    
-    # Calculate cumulative distance along the path for time-parameterization
+    path_arr = np.array(path)
     diffs = np.linalg.norm(np.diff(path_arr, axis=0), axis=1)
     t = np.concatenate(([0.0], np.cumsum(diffs)))
-    
-    # Normalize t to [0, 1] to represent overall progress
     if t[-1] > 0:
         t /= t[-1]
-        
-    # Fit a cubic spline. 
-    # bc_type='clamped' forces the first derivative (velocity) to 0 at the start and end.
-    cs = CubicSpline(t, path_arr, bc_type='clamped')
-    
-    # Generate the dense, smooth trajectory
-    t_smooth = np.linspace(0, 1, num_points)
-    smooth_traj = cs(t_smooth)
-    
-    # Clip to ensure no minor overshoot violates joint limits
-    smooth_traj = np.clip(smooth_traj, JOINT_LOWER, JOINT_UPPER)
-    
-    return smooth_traj.astype(np.float32)
 
+    cs = CubicSpline(t, path_arr, bc_type='clamped')
+    smooth = cs(np.linspace(0, 1, num_points))
+    return np.clip(smooth, JOINT_LOWER, JOINT_UPPER).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Numerical IK
+# ---------------------------------------------------------------------------
 
 def solve_ik(
     root_env,
     goal_pos_world: np.ndarray,
     q0: np.ndarray,
     tol: float = 4e-4,
-    max_restarts: int = 10,  # Number of random restarts to try
+    max_restarts: int = 50,
 ) -> Optional[np.ndarray]:
-    """
-    Numerical IK using the env's SAPIEN FK as an oracle.
-    Uses random restarts to avoid local minima.
-    """
-    device = root_env.device
-    state  = root_env.get_state_dict()
+    import sapien
 
-    def cost(q: np.ndarray) -> float:
-        q_t = torch.tensor(q, dtype=torch.float32, device=device).unsqueeze(0)
-        root_env.agent.robot.set_qpos(q_t)
-        ee = root_env.agent.tcp.pose.p.cpu().numpy().reshape(-1)
-        return float(np.sum((ee - goal_pos_world) ** 2))
+    state = root_env.get_state_dict()
 
-    # Queue of initial guesses: try the robot's current pose first
-    guesses = [q0]
-    for _ in range(max_restarts):
-        guesses.append(np.random.uniform(JOINT_LOWER, JOINT_UPPER))
+    full_q0     = root_env.agent.robot.qpos.cpu().numpy().reshape(-1)
+    gripper_pad = full_q0[7:] if len(full_q0) > 7 else np.array([])
 
-    best_residual = float("inf")
+    pmodel = root_env.agent.robot.create_pinocchio_model()
+    tcp_link_idx = 10  # panda_hand_tcp
+
+    # Get current EE orientation to use as target orientation
+    q_full_init = np.concatenate([q0, gripper_pad]).astype(np.float32)
+    pmodel.compute_forward_kinematics(q_full_init)
+    init_pose = pmodel.get_link_pose(tcp_link_idx)
+    target_pose = sapien.Pose(p=goal_pos_world, q=init_pose.q)
+
+    # Mask: only solve for the 7 arm joints, freeze gripper
+    active_mask = np.zeros(len(full_q0), dtype=np.int32)
+    active_mask[:7] = 1
+
+    guesses = [q0] + [np.random.uniform(JOINT_LOWER, JOINT_UPPER).astype(np.float32) for _ in range(max_restarts)]
+    best_q, best_residual = None, float("inf")
 
     for attempt, guess in enumerate(guesses):
-        result = minimize(
-            cost, guess,
-            method="L-BFGS-B",
-            bounds=list(zip(JOINT_LOWER, JOINT_UPPER)),
-            options={"maxiter": 300, "ftol": 1e-10},
+        q_full = np.concatenate([guess, gripper_pad]).astype(np.float32)
+        result_q, success, error = pmodel.compute_inverse_kinematics(
+            tcp_link_idx,
+            target_pose,
+            initial_qpos=q_full,
+            active_qmask=active_mask,
+            max_iterations=1000,
         )
-        
-        if result.fun < best_residual:
-            best_residual = result.fun
-            
-        if result.fun < tol:
-            root_env.set_state_dict(state)  # always restore the sim state
+
+        if success:
+            root_env.set_state_dict(state)
             if attempt > 0:
-                print(f"  [IK] Solved on random restart {attempt}")
-            return np.clip(result.x, JOINT_LOWER, JOINT_UPPER).astype(np.float32)
+                print(f"  [IK] Solved on restart {attempt}")
+            return np.clip(result_q[:7], JOINT_LOWER, JOINT_UPPER).astype(np.float32)
+
+        if error < best_residual:
+            best_residual = error
+            best_q = result_q[:7]
 
     root_env.set_state_dict(state)
-    print(f"  [IK] failed after {max_restarts + 1} attempts — best residual {best_residual:.6f} > tol {tol}")
+    print(f"  [IK] failed after {max_restarts + 1} attempts — best error {best_residual:.6f}")
     return None
+
+# ---------------------------------------------------------------------------
+# Evaluation loop
+# ---------------------------------------------------------------------------
 
 def run_eval(args):
     np.random.seed(args.seed)
 
     env = gym.make(
-        "ReachGoal",
+        "MoveGoal-WithObstacles-v1",
         num_envs=1,
         obs_mode="state_dict",
         control_mode="pd_joint_pos",
         render_mode="rgb_array",
         reconfiguration_freq=1,
+        sim_backend="physx_cpu",
     )
     root = env.unwrapped
 
@@ -226,7 +256,7 @@ def run_eval(args):
         print(f"\n=== Episode {ep + 1}/{args.num_episodes} ===")
         obs, _ = env.reset()
 
-        q_start  = np.asarray(obs["agent"]["qpos"],  dtype=np.float32).reshape(-1)[:7]
+        q_start  = np.asarray(obs["agent"]["qpos"],     dtype=np.float32).reshape(-1)[:7]
         goal_pos = np.asarray(obs["extra"]["goal_pos"], dtype=np.float32).reshape(-1)
         print(f"  q_start : {np.round(q_start, 3)}")
         print(f"  goal_pos: {np.round(goal_pos, 3)}")
@@ -238,24 +268,29 @@ def run_eval(args):
             successes.append(False); final_dists.append(float("inf")); plan_times.append(0.0)
             continue
 
-        planner = RRTStar(q_start, q_goal,
-                      max_iter=args.max_iter,
-                      step_size=args.step_size,
-                      goal_sample_rate=args.goal_sample_rate,
-                      goal_threshold=args.goal_threshold)
+        planner = RRTConnect(
+            q_start, q_goal,
+            max_iter=args.max_iter,
+            step_size=args.step_size,
+            goal_threshold=args.goal_threshold,
+        )
         path = planner.plan()
         plan_times.append(time.time() - t0)
-        print(f"  RRT: {len(path)} waypoints  ({plan_times[-1]:.2f}s)")
+        print(f"  RRTConnect: {len(path)} waypoints  ({plan_times[-1]:.2f}s)")
 
-        traj = interpolate_path(path, steps_per_segment=args.steps_per_segment)
+        traj = smooth_path_spline(path, num_points=args.num_traj_points)
+
+        # pd_joint_pos action dim may include gripper joints beyond the 7 arm joints
+        act_dim     = env.action_space.shape[0]
+        gripper_pad = np.zeros(act_dim - 7, dtype=np.float32) + 0.04
 
         success, final_dist = False, float("inf")
         for q in traj:
-            action = torch.tensor(q, dtype=torch.float32).unsqueeze(0)
+            action = torch.tensor(np.concatenate([q, gripper_pad]), dtype=torch.float32).unsqueeze(0)
             obs, _, term, trunc, info = env.step(action)
 
             dist = float(np.asarray(info.get("dist_to_goal", [float("inf")])).reshape(-1)[0])
-            suc  = bool(np.asarray(info.get("success", [False])).reshape(-1)[0])
+            suc  = bool(np.asarray(info.get("success",      [False]       )).reshape(-1)[0])
 
             final_dist = dist
             if suc:
@@ -279,13 +314,12 @@ def run_eval(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="RRT eval for ReachGoal")
-    parser.add_argument("--num_episodes",      type=int,   default=10)
-    parser.add_argument("--seed",              type=int,   default=0)
-    parser.add_argument("--max_iter",          type=int,   default=1000)
-    parser.add_argument("--step_size",         type=float, default=0.15)
-    parser.add_argument("--goal_sample_rate",  type=float, default=0.10)
-    parser.add_argument("--goal_threshold",    type=float, default=0.05)
-    parser.add_argument("--steps_per_segment", type=int,   default=15)
+    parser = argparse.ArgumentParser(description="RRT-Connect eval for MoveGoal-WithObstacles-v1")
+    parser.add_argument("--num_episodes",    type=int,   default=10)
+    parser.add_argument("--seed",            type=int,   default=0)
+    parser.add_argument("--max_iter",        type=int,   default=2000)
+    parser.add_argument("--step_size",       type=float, default=0.10)
+    parser.add_argument("--goal_threshold",  type=float, default=0.05)
+    parser.add_argument("--num_traj_points", type=int,   default=150)
     args = parser.parse_args()
     run_eval(args)
