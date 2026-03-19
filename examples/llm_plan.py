@@ -1,24 +1,35 @@
+"""
+PushT-with-obstacles subgoal planning.
+
+Order: Gemini proposes logical steps → optional repair against a full symbolic plan
+(pyperplan) so the sequence is sound → else full PDDL plan → else BFS.
+Output: list of {"skill", "state"}.
+"""
 import json
 import os
 import re
 import subprocess
 import tempfile
-import argparse
 import warnings
+
 import numpy as np
 
 warnings.filterwarnings("ignore", message=".*deprecated.*")
 
-# Prefer PDDL planner for correct, generalizable subgoals; LLM only as fallback.
-PLANNER_PRIORITY = True
-
 GRID = 10
 TABLE_BOUND = 0.12
-TILE_SIZE_M = (2.0 * TABLE_BOUND) / GRID  # each tile side length in m; change GRID or TABLE_BOUND to change it
+TILE_SIZE_M = (2.0 * TABLE_BOUND) / GRID
+
+NUM_BLOCKS = 10
+NUM_PICKABLE = 5
+
+VALID_SKILLS = frozenset({"move_ee", "push_tee", "pick", "place", "push_block"})
+
 
 def _region_to_name(idx: int) -> str:
     row, col = idx // GRID, idx % GRID
     return f"r_{row}_{col}"
+
 
 def _name_to_idx(name: str) -> int:
     m = re.match(r"r_(\d+)_(\d+)", name.strip())
@@ -27,6 +38,7 @@ def _name_to_idx(name: str) -> int:
     row, col = int(m.group(1)), int(m.group(2))
     return row * GRID + col
 
+
 def _xy_to_region(x: float, y: float) -> int:
     s = TABLE_BOUND
     cx = int((float(x) + s) / (2 * s) * GRID)
@@ -34,6 +46,7 @@ def _xy_to_region(x: float, y: float) -> int:
     cx = max(0, min(GRID - 1, cx))
     cy = max(0, min(GRID - 1, cy))
     return cy * GRID + cx
+
 
 def _adjacent_pairs():
     out = []
@@ -50,15 +63,13 @@ def _adjacent_pairs():
                 out.append((r, r - GRID))
     return out
 
-NUM_BLOCKS = 10
-NUM_PICKABLE = 5
 
 def _region_layout_comment() -> str:
     return (
-        f"; REGIONS: r_m_n with m=row (0..{GRID-1}), n=column (0..{GRID-1}). "
-        f"Each tile physical size: {TILE_SIZE_M:.4f} m x {TILE_SIZE_M:.4f} m (set GRID and TABLE_BOUND in code to change). "
-        "Adjacent = share an edge (e.g. r_2_2 adjacent to r_1_2, r_2_1, r_2_3, r_3_2)."
+        f"; REGIONS: r_m_n, m row 0..{GRID - 1}, n col 0..{GRID - 1}. "
+        f"Tile size ~{TILE_SIZE_M:.4f} m. Adjacent = edge neighbors."
     )
+
 
 def state_to_problem(tee_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray, block_regions: list) -> str:
     rt = _xy_to_region(tee_xy[0], tee_xy[1])
@@ -90,15 +101,15 @@ def state_to_problem(tee_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray,
     blocks_on_path = [i for i in range(NUM_BLOCKS) if blocks[i] in path_tee_to_goal_cells]
     block_list = ", ".join(f"block{i}@{_region_to_name(blocks[i])}" for i in range(NUM_BLOCKS))
     on_path_str = (
-        f" Blocks ON THE PATH from tee to goal (MUST clear first): " + ", ".join(f"block{i} at {_region_to_name(blocks[i])}" for i in blocks_on_path) + "."
-    ) if blocks_on_path else " No blocks on the direct path; you may still need to clear some if the only route goes past them."
+        f" Blocks ON THE PATH (clear first): " + ", ".join(f"block{i} at {_region_to_name(blocks[i])}" for i in blocks_on_path) + "."
+    ) if blocks_on_path else " No blocks on direct tee→goal path; may still need clears."
     scenario = (
-        f"; State: robot1={_region_to_name(re)}, tee={_region_to_name(rt)}, goal={_region_to_name(rg)}. Blocks: {block_list}. "
-        "block0..block4 are pickable (use pick then place to move off path). block5..block9 are push-only (use push_block)."
+        f"; robot={_region_to_name(re)}, tee={_region_to_name(rt)}, goal={_region_to_name(rg)}. Blocks: {block_list}. "
+        "block0..4 pickable (pick+place); block5..9 push-only (push_block). "
         f"{on_path_str} "
-        "Your output must be ONLY a sequence of subgoals: each line SKILL then TAB then STATE (one PDDL atom in parentheses)."
+        "Output: one line per subgoal, SKILL<TAB>STATE (one PDDL atom in parens)."
     )
-    return f"""; PushT with obstacles: get the T-shaped object (tee) to the goal region.
+    return f"""; PushT with obstacles — tee to goal.
 {_region_layout_comment()}
 {scenario}
 (define (problem pusht-1)
@@ -110,6 +121,7 @@ def state_to_problem(tee_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray,
   (:goal {goal})
 )"""
 
+
 def _load_config():
     for path in [
         os.path.join(os.path.dirname(__file__), "config.json"),
@@ -119,6 +131,7 @@ def _load_config():
             with open(path, "r") as f:
                 return json.load(f)
     return {}
+
 
 def _parse_problem_regions(problem_str: str):
     robot = re.search(r"\(robot-at robot1 (r_\d+_\d+)\)", problem_str)
@@ -132,14 +145,17 @@ def _parse_problem_regions(problem_str: str):
         blocked,
     )
 
+
 def _adjacency():
     adj = [[] for _ in range(GRID * GRID)]
     for a, b in _adjacent_pairs():
         adj[a].append(b)
     return adj
 
+
 def _bfs_path(start: int, goal: int, blocked: set) -> list:
     from collections import deque
+
     adj = _adjacency()
     seen = {start}
     q = deque([(start, [])])
@@ -153,8 +169,8 @@ def _bfs_path(start: int, goal: int, blocked: set) -> list:
                 q.append((n, path + [r]))
     return []
 
+
 def compute_subgoals(problem_str: str) -> list[dict]:
-    """BFS-based subgoals (move_ee to tee, then push_tee to goal). Returns list of {skill, state}."""
     tee_r, goal_r, robot_r, blocked = _parse_problem_regions(problem_str)
     path_robot_to_tee = _bfs_path(robot_r, tee_r, blocked)
     path_tee_to_goal = _bfs_path(tee_r, goal_r, blocked)
@@ -169,8 +185,7 @@ def compute_subgoals(problem_str: str) -> list[dict]:
 
 
 def _push_tee_subgoals_only(problem_str: str) -> list[dict]:
-    """BFS path from tee to goal as push_tee subgoals only."""
-    tee_r, goal_r, _r, blocked = _parse_problem_regions(problem_str)
+    tee_r, goal_r, _, blocked = _parse_problem_regions(problem_str)
     path = _bfs_path(tee_r, goal_r, blocked)
     if len(path) < 2:
         return []
@@ -178,7 +193,6 @@ def _push_tee_subgoals_only(problem_str: str) -> list[dict]:
 
 
 def run_pddl_planner(domain_path: str, problem_str: str, timeout: int = 60) -> str | None:
-    """Run a PDDL planner (pyperplan if available). Returns plan string or None if no solution/failure."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".pddl", delete=False) as f:
         f.write(problem_str)
         problem_path = f.name
@@ -209,7 +223,6 @@ def run_pddl_planner(domain_path: str, problem_str: str, timeout: int = 60) -> s
 
 
 def plan_to_subgoals(plan_str: str, _problem_str: str) -> list[dict]:
-    """Convert a PDDL plan (one action per line) to subgoals [{skill, state}]. Deterministic, no LLM."""
     subgoals = []
     for line in plan_str.splitlines():
         line = line.strip()
@@ -237,17 +250,16 @@ def plan_to_subgoals(plan_str: str, _problem_str: str) -> list[dict]:
     return subgoals
 
 
-VALID_SKILLS = frozenset({"move_ee", "push_tee", "pick", "place", "push_block"})
-
-
 def _parse_subgoals_response(text: str) -> list[dict]:
-    """Parse LLM output into list of {skill, state}. Expects lines: SKILL\tSTATE or SKILL STATE."""
     out = []
     for line in text.splitlines():
         line = line.strip()
         line = re.sub(r"^\d+[.)]\s*", "", line)
         if not line or line.startswith(";"):
             continue
+        m = re.match(r"Subgoal\s*\d+\s*:\s*(.+)", line, re.I)
+        if m:
+            line = m.group(1).strip()
         if "\t" in line:
             skill, _, state = line.partition("\t")
         else:
@@ -278,44 +290,20 @@ def _call_gemini_subgoals(domain: str, problem_str: str, model: str, temperature
     except ImportError:
         raise RuntimeError("Install google-cloud-aiplatform: pip install google-cloud-aiplatform")
     vertexai.init(project=project, location=location)
-    _default_gemini = "gemini-2.5-flash"
-    gemini_model = model if (model and not model.startswith("gpt-")) else _default_gemini
+    default_model = "gemini-2.5-flash"
+    gemini_model = model if model and not model.startswith("gpt-") else default_model
     if gemini_model.startswith("gpt-"):
-        gemini_model = _default_gemini
+        gemini_model = default_model
     gen_model = GenerativeModel(gemini_model)
     goal_region = _goal_region_from_problem(problem_str) or "r_0_0"
-    prompt = f"""You are a task planner. Output a COMPLETE sequence of subgoals to get the TEE to the goal. Output ONLY subgoals, one per line: SKILL<TAB>STATE.
+    prompt = f"""You decompose this manipulation task into ordered logical subgoals (milestones), like splitting a big goal into steps.
+Each line is one milestone: the SKILL that achieves it, then TAB, then the target state as ONE PDDL atom in parentheses.
 
-CRITICAL: The goal region in this problem is {goal_region}. Your sequence MUST end with:
-push_tee	(object-at tee {goal_region})
-So you MUST include a full chain of push_tee subgoals (one per cell) from the tee's current region to {goal_region}. Do not stop at move_ee or after one push_tee.
-
-SKILLS (exactly one per line):
-- move_ee → state (robot-at robot1 r_X_Y)
-- push_tee → state (object-at tee r_X_Y)   [use many of these: one per step toward goal]
-- pick → state (holding robot1 blockN)   [only for block0..block4]
-- place → state (block-at blockN r_X_Y)
-- push_block → state (block-at blockN r_X_Y)   [only for block5..block9]
-
-REQUIRED ORDER:
-1. If the problem comment says "Blocks ON THE PATH (MUST clear first): blockN at r_...", then FIRST output subgoals to clear each: move_ee to that block's region, then for block0..block4: pick then place (block at a clear region off path); for block5..block9: push_block (one cell off path).
-2. Then move_ee so the robot is at the TEE's region (state: (robot-at robot1 r_TEE)).
-3. Then a SEQUENCE of push_tee subgoals: each line push_tee	(object-at tee r_X_Y) for the next region along the path from tee to goal. The LAST line must be push_tee	(object-at tee {goal_region}).
-
-Format: each line is SKILL then TAB then STATE. State is one PDDL atom in parentheses. No other text.
-
-Example (goal r_1_8, tee at r_5_5):
-move_ee	(robot-at robot1 r_2_5)
-pick	(holding robot1 block0)
-place	(block-at block0 r_2_6)
-move_ee	(robot-at robot1 r_5_5)
-push_tee	(object-at tee r_4_5)
-push_tee	(object-at tee r_3_5)
-push_tee	(object-at tee r_2_5)
-push_tee	(object-at tee r_1_5)
-push_tee	(object-at tee r_1_6)
-push_tee	(object-at tee r_1_7)
-push_tee	(object-at tee r_1_8)
+Rules:
+- Order matters: earlier lines must be achievable before later ones.
+- End with: push_tee	(object-at tee {goal_region})
+- Before that push chain: if blocks block the path, clear them (pick/place or push_block), then move_ee to the tee's cell, then many push_tee steps (one grid cell per push_tee toward {goal_region}).
+- Skills: move_ee, push_tee, pick, place, push_block. States: (robot-at robot1 r_i_j), (object-at tee r_i_j), (holding robot1 blockN), (block-at blockN r_i_j).
 
 Domain:
 {domain}
@@ -323,8 +311,7 @@ Domain:
 Problem:
 {problem_str}
 
-Subgoals (one per line, SKILL<TAB>STATE; must end with push_tee	(object-at tee {goal_region})):
-"""
+Output ONLY lines: SKILL<TAB>STATE. No other text."""
     response = gen_model.generate_content(
         prompt,
         generation_config={"temperature": temperature, "max_output_tokens": 2048},
@@ -334,109 +321,111 @@ Subgoals (one per line, SKILL<TAB>STATE; must end with push_tee	(object-at tee {
     text = response.candidates[0].content.parts[0].text.strip()
     return _parse_subgoals_response(text)
 
-def get_subgoals(domain_path: str, problem_str: str, model: str = "gemini-2.5-flash", temperature: float = 0.0, offline: bool = False, use_llm_first: bool = False) -> list[dict]:
-    """Return sequence of subgoals [{skill, state}, ...]. By default: PDDL planner first (robust); LLM only as fallback."""
+
+def _align_gemini_to_symbolic(gemini_steps: list[dict], symbolic_steps: list[dict]) -> list[dict]:
+    """Sound order from symbolic plan; keep Gemini's skill when a step's state matches."""
+    if not symbolic_steps:
+        return gemini_steps
+    out = []
+    j = 0
+    for g in gemini_steps:
+        while j < len(symbolic_steps) and symbolic_steps[j]["state"] != g["state"]:
+            s = symbolic_steps[j]
+            out.append({"skill": s["skill"], "state": s["state"]})
+            j += 1
+        if j < len(symbolic_steps) and symbolic_steps[j]["state"] == g["state"]:
+            out.append({"skill": g["skill"], "state": g["state"]})
+            j += 1
+    while j < len(symbolic_steps):
+        s = symbolic_steps[j]
+        out.append({"skill": s["skill"], "state": s["state"]})
+        j += 1
+    return out
+
+
+def _ensure_tee_goal_tail(subgoals: list[dict], problem_str: str) -> list[dict]:
+    out = list(subgoals)
+    goal_region = _goal_region_from_problem(problem_str)
+    if not goal_region:
+        return out
+    goal_state = f"(object-at tee {goal_region})"
+    if out and out[-1].get("state") == goal_state:
+        return out
+    seen = {s["state"] for s in out}
+    for e in _push_tee_subgoals_only(problem_str):
+        if e["state"] not in seen:
+            out.append(e)
+            seen.add(e["state"])
+        if e["state"] == goal_state:
+            break
+    return out
+
+
+def get_subgoals(
+    domain_path: str,
+    problem_str: str,
+    model: str = "gemini-2.5-flash",
+    temperature: float = 0.0,
+    offline: bool = False,
+    use_llm_first: bool = False,
+) -> list[dict]:
+    """
+    Default: Gemini logical subgoals → merge with full symbolic plan (sound order/skills where needed).
+    Fallbacks: symbolic plan only → BFS.
+
+    use_llm_first=True: Gemini only (+ optional push_tee tail), no pyperplan repair.
+    SUBGOAL_PDDL_FIRST=1 or LLM_PLAN_PLANNER_FIRST: pyperplan first (old behavior).
+    """
     if offline or os.environ.get("LLM_PLAN_OFFLINE"):
         return compute_subgoals(problem_str)
-    if PLANNER_PRIORITY and not use_llm_first:
+
+    def _env_on(name: str) -> bool:
+        v = (os.environ.get(name) or "").strip().lower()
+        return v in ("1", "true", "yes", "on")
+
+    if _env_on("SUBGOAL_PDDL_FIRST") or _env_on("LLM_PLAN_PLANNER_FIRST"):
         plan = run_pddl_planner(domain_path, problem_str)
         if plan:
             return plan_to_subgoals(plan, problem_str)
-    with open(domain_path, "r") as f:
-        domain = f.read()
-    config = _load_config()
-    subgoals = _call_gemini_subgoals(domain, problem_str, model, temperature, config)
-    if not subgoals:
         return compute_subgoals(problem_str)
-    goal_region = _goal_region_from_problem(problem_str)
-    goal_state = f"(object-at tee {goal_region})" if goal_region else None
-    has_push_tee = any(s.get("skill") == "push_tee" for s in subgoals)
-    ends_at_goal = subgoals and subgoals[-1].get("state") == goal_state
-    if goal_region and (not has_push_tee or not ends_at_goal):
-        push_only = _push_tee_subgoals_only(problem_str)
-        if push_only:
-            subgoals = subgoals + push_only
-    return subgoals
 
-def run_from_env(model: str = "gemini-2.5-flash", temperature: float = 0.0, offline: bool = False, use_llm_first: bool = False) -> tuple[str, list[dict]]:
-    import gymnasium as gym
-    import pusht_w_obstacles
-    from planning_wrapper.adapters import PushTTaskAdapter
-    from planning_wrapper.wrappers.maniskill_planning import ManiSkillPlanningWrapper
+    sym: list[dict] = []
+    plan = run_pddl_planner(domain_path, problem_str)
+    if plan:
+        sym = plan_to_subgoals(plan, problem_str)
 
-    env = gym.make(
-        "PushT-WithObstacles-v1",
-        obs_mode="state_dict",
-        control_mode="pd_ee_delta_pose",
-    )
-    adapter = PushTTaskAdapter()
-    wrapper = ManiSkillPlanningWrapper(env, adapter=adapter)
-    obs, _ = wrapper.reset(seed=0)
-    planning_obs = wrapper.get_planning_obs(obs)
-    tee_xy = np.asarray(planning_obs["obj_pose"], dtype=np.float64).reshape(-1, 7)[0, :2]
-    goal_xy = np.asarray(planning_obs["goal_pos"], dtype=np.float64).reshape(-1, 3)[0, :2]
-    ee_xy = np.asarray(planning_obs["tcp_pose"], dtype=np.float64).reshape(-1, 7)[0, :2]
-    blocked = []
-    root = wrapper.env.unwrapped
-    if hasattr(root, "obstacles"):
-        for obj in root.obstacles:
-            pose = getattr(obj, "pose", None)
-            if pose is None and callable(getattr(obj, "get_pose", None)):
-                pose = obj.get_pose()
-            if pose is not None:
-                p = getattr(pose, "p", np.asarray(pose)[:3])
-                pos = np.asarray(p, dtype=np.float64).reshape(-1)
-                if len(pos) >= 2:
-                    r = _xy_to_region(float(pos[0]), float(pos[1]))
-                    if r not in blocked:
-                        blocked.append(r)
-    domain_path = os.path.join(os.path.dirname(__file__), "domain_pusht.pddl")
-    problem_str = state_to_problem(tee_xy, goal_xy, ee_xy, blocked)
-    subgoals = get_subgoals(domain_path, problem_str, model=model, temperature=temperature, offline=offline, use_llm_first=use_llm_first)
-    wrapper.close()
-    return problem_str, subgoals
+    if use_llm_first:
+        with open(domain_path, "r") as f:
+            domain_text = f.read()
+        config = _load_config()
+        try:
+            gemini = _call_gemini_subgoals(domain_text, problem_str, model, temperature, config)
+        except Exception:
+            gemini = []
+        if not gemini:
+            return sym if sym else compute_subgoals(problem_str)
+        return _ensure_tee_goal_tail(gemini, problem_str)
 
-def run_dummy(model: str = "gemini-2.5-flash", temperature: float = 0.0, offline: bool = False, use_llm_first: bool = False) -> tuple[str, list[dict]]:
-    tee_xy = np.array([0.0, 0.0])
-    goal_xy = np.array([0.08, -0.08])
-    ee_xy = np.array([-0.02, 0.0])
-    n = GRID * GRID
-    block_regions = [0, 1, 2, 3, 4, n // 4, n // 2, 3 * n // 4, n - 8, n - 1]
-    domain_path = os.path.join(os.path.dirname(__file__), "domain_pusht.pddl")
-    problem_str = state_to_problem(tee_xy, goal_xy, ee_xy, block_regions)
-    subgoals = get_subgoals(domain_path, problem_str, model=model, temperature=temperature, offline=offline, use_llm_first=use_llm_first)
-    return problem_str, subgoals
+    with open(domain_path, "r") as f:
+        domain_text = f.read()
+    config = _load_config()
+    gemini: list[dict] = []
+    try:
+        gemini = _call_gemini_subgoals(domain_text, problem_str, model, temperature, config)
+    except Exception:
+        pass
 
-def _compact_state_summary(problem_str: str) -> str:
-    robot = re.search(r"\(robot-at robot1 (r_\d+_\d+)\)", problem_str)
-    tee = re.search(r"\(object-at tee (r_\d+_\d+)\)", problem_str)
-    goal = re.search(r"\(goal-at (r_\d+_\d+)\)", problem_str)
-    blocks = re.findall(r"\(block-at block\d+ (r_\d+_\d+)\)", problem_str)
-    r = robot.group(1) if robot else "?"
-    t = tee.group(1) if tee else "?"
-    g = goal.group(1) if goal else "?"
-    b = ", ".join(sorted(set(blocks))) if blocks else "none"
-    return f"robot={r}  tee={t}  goal={g}  blocks=[{b}]"
+    if sym and gemini:
+        merged = _align_gemini_to_symbolic(gemini, sym)
+        return merged
+    if sym:
+        return sym
+    if gemini:
+        return _ensure_tee_goal_tail(gemini, problem_str)
+    return compute_subgoals(problem_str)
+
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--live", action="store_true", help="Use live env state; else dummy state")
-    ap.add_argument("--offline", action="store_true", help="No API: BFS subgoals only (no pick/place)")
-    ap.add_argument("--llm", action="store_true", help="Skip PDDL planner; use LLM only (fallback path)")
-    ap.add_argument("--verbose", action="store_true", help="Print state summary and full PDDL problem")
-    ap.add_argument("--model", default="gemini-2.5-flash", help="Gemini model name")
-    ap.add_argument("--temperature", type=float, default=0.0)
-    args = ap.parse_args()
-    if args.live:
-        problem_str, subgoals = run_from_env(model=args.model, temperature=args.temperature, offline=args.offline, use_llm_first=args.llm)
-    else:
-        problem_str, subgoals = run_dummy(model=args.model, temperature=args.temperature, offline=args.offline, use_llm_first=args.llm)
-    if args.verbose:
-        print("State:", _compact_state_summary(problem_str))
-        if args.offline:
-            print("Mode: offline (BFS; no pick/place)")
-        elif args.llm:
-            print("Mode: LLM only (planner skipped)")
-        print(f"\nRegions: r_m_n, tile={TILE_SIZE_M:.4f}m\nProblem:\n{problem_str}\n")
-    for sg in subgoals:
-        print(f"{sg['skill']}\t{sg['state']}")
+    from pusht_obstacles_subgoal_runner import main
+
+    main()
