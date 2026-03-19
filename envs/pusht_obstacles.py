@@ -1,4 +1,8 @@
 """PushT with obstacle blocks on the table, plus skill-specific subclasses."""
+from __future__ import annotations
+
+from typing import Any, Dict
+
 import numpy as np
 import sapien
 import torch
@@ -184,3 +188,76 @@ class PushCubeWithObstaclesEnv(PushTWithObstaclesEnv):
 
     def compute_normalized_dense_reward(self, obs, action, info):
         return self.compute_dense_reward(obs, action, info) / 7.0
+
+
+@register_env("PickSkillEnv", max_episode_steps=100)
+class PickSkillEnv(PushTWithObstaclesEnv):
+    """Pick a randomly selected obstacle cube off the table.
+
+    Each episode one of the inherited obstacle cubes is chosen as the pick
+    target. The skill must grasp and lift it above `lift_threshold`.
+
+    Observation extras: ee_pos (3,), pick_cube_pos (3,), ee_to_pick_cube (3,),
+                        is_grasped (1,)
+    Success: is_grasped AND pick_cube_pos z > lift_threshold.
+    """
+
+    # Absolute z height (cube centre) that counts as lifted off the table.
+    # Obstacle half-sizes range 0.015–0.025, so 0.06 requires ~3–4 cm of lift.
+    lift_threshold = 0.06
+
+    def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
+        super()._initialize_episode(env_idx, options)
+        with torch.device(self.device):
+            b = len(env_idx)
+            if not hasattr(self, "pick_obstacle_idx") or self.pick_obstacle_idx.shape[0] != self.num_envs:
+                self.pick_obstacle_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+            self.pick_obstacle_idx[env_idx] = torch.randint(
+                len(self.obstacles), (b,), device=self.device)
+
+    def _get_pick_cube_pos(self) -> torch.Tensor:
+        """Position of the selected pick obstacle for each env. Shape: (num_envs, 3)."""
+        all_pos = torch.stack([obs.pose.p for obs in self.obstacles], dim=0)
+        return all_pos[self.pick_obstacle_idx, torch.arange(self.num_envs, device=self.device)]
+
+    def evaluate(self) -> Dict[str, Any]:
+        pick_cube_pos = self._get_pick_cube_pos()
+        # Stack per-obstacle grasping flags then select the target per env
+        is_grasped = torch.stack(
+            [self.agent.is_grasping(obs) for obs in self.obstacles], dim=0
+        )[self.pick_obstacle_idx, torch.arange(self.num_envs, device=self.device)]
+        is_lifted = pick_cube_pos[:, 2] > self.lift_threshold
+        return {
+            "success": is_grasped & is_lifted,
+            "is_grasped": is_grasped,
+            "is_lifted": is_lifted,
+        }
+
+    def _get_obs_extra(self, info: Dict) -> Dict:
+        ee_pos        = self.agent.tcp.pose.p
+        pick_cube_pos = self._get_pick_cube_pos()
+        return {
+            "ee_pos":          ee_pos,
+            "pick_cube_pos":   pick_cube_pos,
+            "ee_to_pick_cube": pick_cube_pos - ee_pos,
+            "is_grasped":      info["is_grasped"],
+        }
+
+    def compute_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
+        ee_pos        = self.agent.tcp.pose.p
+        pick_cube_pos = self._get_pick_cube_pos()
+        reach_reward  = 1.0 - torch.tanh(5.0 * torch.linalg.norm(pick_cube_pos - ee_pos, dim=1))
+        is_grasped    = info["is_grasped"].float()
+        lift_reward   = 1.0 - torch.tanh(10.0 * (self.lift_threshold - pick_cube_pos[:, 2]).clamp(min=0.0))
+        reward        = reach_reward + is_grasped + lift_reward * is_grasped
+        reward[info["success"]] = 5.0
+        return reward
+
+    def compute_normalized_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
+        return self.compute_dense_reward(obs=obs, action=action, info=info) / 5.0
+
+    @property
+    def _default_human_render_camera_configs(self):
+        pose = sapien_utils.look_at(eye=[0.3, 0, 0.6], target=[-0.1, 0, 0.1])
+        return CameraConfig("render_camera", pose=pose, width=512, height=512,
+                            fov=1, near=0.01, far=100)
