@@ -389,11 +389,6 @@ def get_subgoals(
             return plan_to_subgoals(plan, problem_str)
         return compute_subgoals(problem_str)
 
-    sym: list[dict] = []
-    plan = run_pddl_planner(domain_path, problem_str)
-    if plan:
-        sym = plan_to_subgoals(plan, problem_str)
-
     if use_llm_first:
         with open(domain_path, "r") as f:
             domain_text = f.read()
@@ -403,7 +398,7 @@ def get_subgoals(
         except Exception:
             gemini = []
         if not gemini:
-            return sym if sym else compute_subgoals(problem_str)
+            return compute_subgoals(problem_str)
         return _ensure_tee_goal_tail(gemini, problem_str)
 
     with open(domain_path, "r") as f:
@@ -413,16 +408,23 @@ def get_subgoals(
     try:
         gemini = _call_gemini_subgoals(domain_text, problem_str, model, temperature, config)
     except Exception:
-        pass
+        gemini = []
 
-    if sym and gemini:
-        merged = _align_gemini_to_symbolic(gemini, sym)
-        return merged
-    if sym:
-        return sym
-    if gemini:
-        return _ensure_tee_goal_tail(gemini, problem_str)
-    return compute_subgoals(problem_str)
+    if not gemini:
+        plan = run_pddl_planner(domain_path, problem_str)
+        if plan:
+            return plan_to_subgoals(plan, problem_str)
+        return compute_subgoals(problem_str)
+
+    gemini = _ensure_tee_goal_tail(gemini, problem_str)
+
+    plan = run_pddl_planner(domain_path, problem_str)
+    if plan:
+        sym = plan_to_subgoals(plan, problem_str)
+        if sym:
+            return _align_gemini_to_symbolic(gemini, sym)
+
+    return gemini
 
 
 if __name__ == "__main__":
