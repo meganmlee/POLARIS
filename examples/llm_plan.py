@@ -426,6 +426,6 @@ def get_subgoals(
 
 
 if __name__ == "__main__":
-    from pusht_obstacles_subgoal_runner import main
+    from env_subgoal_runner import main
 
     main()
