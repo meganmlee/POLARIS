@@ -193,6 +193,209 @@ wrapper.restore_state(snapshot)    # backtrack
 
 Available adapters: `PushTTaskAdapter`, `ShelfRetrieveTaskAdapter`.
 
+
+
+## Subgoal generation running
+
+## 1. `examples/llm_plan.py` (The Planner)
+
+This file is the **brain**.
+
+It takes a simple input:
+- Where the object (tee) is
+- Where the goal is
+- Where the robot hand is
+- Where obstacles are
+
+Then it:
+
+### Step 1: Converts everything into a grid
+- Breaks the table into small boxes (like graph paper)
+- Figures out which box everything is in
+
+### Step 2: Tries to make a plan (subgoals)
+
+It tries **3 methods (in order):**
+
+1. **Gemini (AI model)**
+   - Asks AI: "What steps should I take?"
+   - AI gives a list like:
+     - move here
+     - push object
+     - etc.
+
+2. **If AI fails → use pyperplan (symbolic planner)**
+   - This is a strict rule-based planner
+   - It computes a valid step-by-step plan
+
+3. **If that also fails → use BFS**
+   - Very basic search
+   - Just finds *some* way to reach goal
+
+### Step 3: Fix the plan
+- If both AI and planner exist:
+  - It adjusts AI steps to make them logically correct
+
+### Output:
+A list like:
+
+move_ee (robot-at r_5_5)
+push_tee (object-at r_4_5)
+
+
+---
+
+## 2. `examples/env_subgoal_runner.py` (The Runner)
+
+This file is the **input builder + executor**.
+
+### Two modes:
+
+#### (A) `--live` (real simulator)
+- Runs a robot simulation (ManiSkill)
+- Reads:
+  - object position
+  - goal position
+  - robot hand position
+  - obstacles
+
+#### (B) No flag (default)
+- Uses fake/dummy data
+- No simulator needed
+
+### What it does:
+1. Gets the current state
+2. Sends it to the planner (`llm_plan.py`)
+3. Prints the subgoals
+
+---
+
+## 3. `examples/domain_pusht.pddl` (Rules File)
+
+This file defines the **rules of the world**.
+
+### It tells:
+- What things exist:
+  - robot, object, blocks, grid cells
+
+- What is true/false:
+  - robot-at
+  - object-at
+  - clear space
+
+- What actions are allowed:
+  - move_ee → move robot hand
+  - push_tee → push object
+  - pick → pick object
+  - place → place object
+  - push_block → move obstacle
+
+Think of it like:
+> "What moves are legal in this game?"
+
+---
+
+## 4. `examples/config.json.example` (Settings Template)
+
+This is just a **template file**.
+
+Used for:
+- Connecting to Gemini (Google AI)
+
+You need to fill:
+- project ID
+- location
+
+OR set them as environment variables
+
+---
+
+# Setup (Very Simple)
+
+From project folder:
+
+### Install basics:
+
+pip install -r requirements.txt
+
+
+### Install Gemini support:
+
+pip install google-cloud-aiplatform
+
+
+### Install ManiSkill (if not already)
+- Needed for simulation
+
+### Set config (one of these):
+
+#### Option 1 (env vars):
+
+export VERTEX_PROJECT=your_project
+export VERTEX_LOCATION=us-central1
+
+
+#### Option 2 (file):
+- Copy config.json.example → config.json
+- Fill values
+
+---
+
+# How to Run
+
+## 1. Simple test (no AI, no planner)
+
+python examples/llm_plan.py --offline
+
+- Uses only BFS
+- Good for debugging
+
+---
+
+## 2. Normal run (AI + fallback planner)
+
+python examples/llm_plan.py
+
+
+---
+
+## 3. Run with simulator
+
+python examples/llm_plan.py --live
+
+
+---
+
+## 4. Only AI (skip planner)
+
+python examples/llm_plan.py --live --llm
+
+
+---
+
+## 5. Force planner first
+
+SUBGOAL_PDDL_FIRST=1 python examples/llm_plan.py --live
+
+
+---
+
+# What Output Looks Like
+
+You will see steps like:
+
+move_ee (robot-at r_5_5)
+push_tee (object-at r_4_5)
+push_tee (object-at goal)
+
+
+Meaning:
+- move robot
+- push object
+- reach goal
+
+---
+
 ## Requirements
 
 - Python 3.11
@@ -201,6 +404,8 @@ Available adapters: `PushTTaskAdapter`, `ShelfRetrieveTaskAdapter`.
 - Pinocchio (via conda)
 
 See [requirements.txt](requirements.txt) for the full dependency list.
+
+
 
 ## Contributors
 Megan Lee
