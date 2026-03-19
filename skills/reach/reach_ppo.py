@@ -133,6 +133,70 @@ class Agent(nn.Module):
         return action, dist.log_prob(action).sum(1), dist.entropy().sum(1), self.critic(x)
 
 
+# ---------------------------------------------------------------------------
+# Callable skill API
+# ---------------------------------------------------------------------------
+
+def _build_flat_obs(obs: dict, goal_xyz: np.ndarray) -> np.ndarray:
+    """
+    Reconstruct the flat state obs that MoveGoal-WithObstacles produces during training.
+    obs_mode='state' flattens: qpos(9), qvel(9), goal_pos(3), ee_pos(3), ee_to_goal(3) = 27.
+    """
+    qpos    = np.asarray(obs["agent"]["qpos"], dtype=np.float32).reshape(-1)
+    qvel    = np.asarray(obs["agent"]["qvel"], dtype=np.float32).reshape(-1)
+    ee_pos  = np.asarray(obs["extra"]["tcp_pose"], dtype=np.float32).reshape(-1)[:3]
+    goal    = goal_xyz.astype(np.float32)
+    return np.concatenate([qpos, qvel, goal, ee_pos, goal - ee_pos])
+
+
+def execute(
+    env,
+    obs: dict,
+    goal_xyz: np.ndarray,
+    checkpoint: str,
+    max_steps: int = 200,
+    render: bool = False,
+    device: str = "cpu",
+) -> tuple[bool, dict]:
+    """
+    Run the PPO reach policy on an already-running env to move EE to goal_xyz.
+    Requires a checkpoint trained on MoveGoal-WithObstacles-v1 with obs_mode='state'.
+    Returns (success, latest_obs).
+    """
+    import types
+    state_dict = torch.load(checkpoint, map_location=device, weights_only=True)
+    obs_dim = state_dict["actor_mean.0.weight"].shape[1]
+    act_dim = state_dict["actor_mean.6.weight"].shape[0]
+    env_ns = types.SimpleNamespace(
+        single_observation_space=types.SimpleNamespace(shape=(obs_dim,)),
+        single_action_space=types.SimpleNamespace(shape=(act_dim,)),
+    )
+    agent = Agent(env_ns).to(device)
+    agent.load_state_dict(state_dict)
+    agent.eval()
+
+    action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
+    action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
+
+    current_obs = obs
+    for _ in range(max_steps):
+        flat  = _build_flat_obs(current_obs, goal_xyz)
+        obs_t = torch.from_numpy(flat).float().unsqueeze(0).to(device)
+        with torch.no_grad():
+            action = torch.clamp(agent.get_action(obs_t, deterministic=True), action_low, action_high)
+        current_obs, _, term, trunc, _ = env.step(action)
+        if render:
+            env.render()
+        ee_pos = np.asarray(current_obs["extra"]["tcp_pose"], dtype=np.float32).reshape(-1)[:3]
+        if np.linalg.norm(ee_pos - goal_xyz) < 0.02:
+            return True, current_obs
+        if np.asarray(term).any() or np.asarray(trunc).any():
+            break
+
+    ee_pos = np.asarray(current_obs["extra"]["tcp_pose"], dtype=np.float32).reshape(-1)[:3]
+    return bool(np.linalg.norm(ee_pos - goal_xyz) < 0.05), current_obs
+
+
 if __name__ == "__main__":
     import tyro
     args = tyro.cli(Args)

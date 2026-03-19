@@ -45,6 +45,11 @@ POLARIS/
 │   ├── reach_demo.py              # Proportional controller baseline
 │   ├── reach_ppo_demo.py
 │   └── reach_rrt_demo.py
+├── high_level_planner/            # LLM-based subgoal generation
+│   ├── llm_plan.py                # PDDL problem builder + LLM/symbolic/BFS planner
+│   ├── env_subgoal_runner.py      # Live env or dummy state → subgoals
+│   ├── domain_pusht.pddl          # PDDL domain (actions, predicates)
+│   └── config.json.example        # Gemini API config template
 ├── planning_wrapper/              # State clone/restore utilities for planning backends
 └── runs/                          # Training checkpoints (auto-created)
 ```
@@ -197,7 +202,7 @@ Available adapters: `PushTTaskAdapter`, `ShelfRetrieveTaskAdapter`.
 
 ## Subgoal generation running
 
-## 1. `examples/llm_plan.py` (The Planner)
+## 1. `high_level_planner/llm_plan.py` (The Planner)
 
 This file is the **brain**.
 
@@ -239,13 +244,13 @@ It tries **3 methods (in order):**
 ### Output:
 A list like:
 
-move_ee (robot-at r_5_5)
+reach (robot-at r_5_5)
 push_tee (object-at r_4_5)
 
 
 ---
 
-## 2. `examples/env_subgoal_runner.py` (The Runner)
+## 2. `high_level_planner/env_subgoal_runner.py` (The Runner)
 
 This file is the **input builder + executor**.
 
@@ -270,7 +275,7 @@ This file is the **input builder + executor**.
 
 ---
 
-## 3. `examples/domain_pusht.pddl` (Rules File)
+## 3. `high_level_planner/domain_pusht.pddl` (Rules File)
 
 This file defines the **rules of the world**.
 
@@ -284,18 +289,18 @@ This file defines the **rules of the world**.
   - clear space
 
 - What actions are allowed:
-  - move_ee → move robot hand
+  - reach → move robot hand
   - push_tee → push object
   - pick → pick object
   - place → place object
-  - push_block → move obstacle
+  - push_cube → move obstacle
 
 Think of it like:
 > "What moves are legal in this game?"
 
 ---
 
-## 4. `examples/config.json.example` (Settings Template)
+## 4. `high_level_planner/config.json.example` (Settings Template)
 
 This is just a **template file**.
 
@@ -314,12 +319,7 @@ OR set them as environment variables
 
 From project folder:
 
-### Install basics:
-
-pip install -r requirements.txt
-
-
-### Install Gemini support:
+### Install Gemini support if not already:
 
 pip install google-cloud-aiplatform
 
@@ -345,7 +345,7 @@ export VERTEX_LOCATION=us-central1
 
 ## 1. Simple test (no AI, no planner)
 
-python examples/llm_plan.py --offline
+python high_level_planner/llm_plan.py --offline
 
 - Uses only BFS
 - Good for debugging
@@ -354,28 +354,28 @@ python examples/llm_plan.py --offline
 
 ## 2. Normal run (AI + fallback planner)
 
-python examples/llm_plan.py
+python high_level_planner/llm_plan.py
 
 
 ---
 
 ## 3. Run with simulator
 
-python examples/llm_plan.py --live
+python high_level_planner/llm_plan.py --live
 
 
 ---
 
 ## 4. Only AI (skip planner)
 
-python examples/llm_plan.py --live --llm
+python high_level_planner/llm_plan.py --live --llm
 
 
 ---
 
 ## 5. Force planner first
 
-SUBGOAL_PDDL_FIRST=1 python examples/llm_plan.py --live
+SUBGOAL_PDDL_FIRST=1 python high_level_planner/llm_plan.py --live
 
 
 ---
@@ -384,7 +384,7 @@ SUBGOAL_PDDL_FIRST=1 python examples/llm_plan.py --live
 
 You will see steps like:
 
-move_ee (robot-at r_5_5)
+reach (robot-at r_5_5)
 push_tee (object-at r_4_5)
 push_tee (object-at goal)
 

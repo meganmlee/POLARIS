@@ -6,7 +6,7 @@
 ;   the gripper/end-effector:
 ;   - (pickable ?b): block is SMALLER than gripper → use PICK and PLACE to move
 ;     it out of the way.
-;   - (push-only ?b): block is BIGGER than gripper → cannot pick; use PUSH_BLOCK
+;   - (push-only ?b): block is BIGGER than gripper → cannot pick; use PUSH_CUBE
 ;     to push it one cell out of the way.
 ; The planner must figure out from (pickable blocki) and (push-only blockj) which
 ; action to use for each obstacle. Main objective: get the tee to the goal region.
@@ -27,9 +27,9 @@
     (pickable ?b - block)
     (push-only ?b - block))
 
-  (:action move_ee
+  (:action reach
     :parameters (?rob - robot ?from ?to - region)
-    :precondition (and (robot-at ?rob ?from) (adjacent ?from ?to) (clear ?to))
+    :precondition (and (robot-at ?rob ?from) (adjacent ?from ?to))
     :effect (and (robot-at ?rob ?to) (not (robot-at ?rob ?from))))
 
   (:action push_tee
@@ -47,7 +47,7 @@
     :precondition (and (holding ?rob ?b) (robot-at ?rob ?loc) (clear ?loc))
     :effect (and (block-at ?b ?loc) (not (holding ?rob ?b)) (not (clear ?loc))))
 
-  (:action push_block
+  (:action push_cube
     :parameters (?rob - robot ?b - block ?from ?to - region)
     :precondition (and (push-only ?b) (block-at ?b ?from) (robot-at ?rob ?from) (adjacent ?from ?to) (clear ?to))
     :effect (and (block-at ?b ?to) (not (block-at ?b ?from)) (robot-at ?rob ?to) (not (robot-at ?rob ?from)) (clear ?from) (not (clear ?to)))))

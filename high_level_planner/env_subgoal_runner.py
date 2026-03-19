@@ -1,39 +1,18 @@
 import argparse
 import os
 import re
+import sys
 
 import numpy as np
 
 from llm_plan import GRID, TILE_SIZE_M, _xy_to_region, get_subgoals, state_to_problem
 
 
-def run_from_env(model: str = "gemini-2.5-flash", temperature: float = 0.0, offline: bool = False, use_llm_first: bool = False):
+def subgoals_from_wrapper(wrapper, obs, model: str = "gemini-2.5-flash", temperature: float = 0.0, offline: bool = False, use_llm_first: bool = False):
     """
-    Produce (PDDL_problem_str, subgoals) using the live PushT-WithObstacles environment.
-
-    Note: env imports stay inside this function so the planner module itself stays env-free.
+    Produce (PDDL_problem_str, subgoals) from an already-running wrapper+obs.
+    Used by both run_from_env and the closed-loop executor.
     """
-    import gymnasium as gym
-
-    import envs  # noqa: F401 - register envs (maniskill-style)
-    # Importing this module registers the custom env in some ManiSkill setups.
-    try:
-        import pusht_w_obstacles  # noqa: F401
-    except Exception:
-        # In many setups, `import envs` is enough; ignore if the env module isn't importable.
-        pass
-
-    from planning_wrapper.adapters import PushTTaskAdapter
-    from planning_wrapper.wrappers.maniskill_planning import ManiSkillPlanningWrapper
-
-    env = gym.make(
-        "PushT-WithObstacles-v1",
-        obs_mode="state_dict",
-        control_mode="pd_ee_delta_pose",
-    )
-    adapter = PushTTaskAdapter()
-    wrapper = ManiSkillPlanningWrapper(env, adapter=adapter)
-    obs, _ = wrapper.reset(seed=0)
     planning_obs = wrapper.get_planning_obs(obs)
 
     tee_xy = np.asarray(planning_obs["obj_pose"], dtype=np.float64).reshape(-1, 7)[0, :2]
@@ -48,7 +27,13 @@ def run_from_env(model: str = "gemini-2.5-flash", temperature: float = 0.0, offl
             if pose is None and callable(getattr(obj, "get_pose", None)):
                 pose = obj.get_pose()
             if pose is not None:
-                p = getattr(pose, "p", np.asarray(pose)[:3])
+                if hasattr(pose, "p"):
+                    p = pose.p
+                else:
+                    try:
+                        p = np.asarray(pose, dtype=np.float64).reshape(-1)[:3]
+                    except (ValueError, TypeError):
+                        continue
                 pos = np.asarray(p, dtype=np.float64).reshape(-1)
                 if len(pos) >= 2:
                     r = _xy_to_region(float(pos[0]), float(pos[1]))
@@ -65,6 +50,29 @@ def run_from_env(model: str = "gemini-2.5-flash", temperature: float = 0.0, offl
         offline=offline,
         use_llm_first=use_llm_first,
     )
+    return problem_str, subgoals
+
+
+def run_from_env(model: str = "gemini-2.5-flash", temperature: float = 0.0, offline: bool = False, use_llm_first: bool = False, seed: int = 0):
+    """
+    Produce (PDDL_problem_str, subgoals) using the live PushT-WithObstacles environment.
+
+    Note: env imports stay inside this function so the planner module itself stays env-free.
+    """
+    import gymnasium as gym
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    import envs  # noqa: F401
+    from planning_wrapper.adapters import PushTTaskAdapter
+    from planning_wrapper.wrappers.maniskill_planning import ManiSkillPlanningWrapper
+
+    env = gym.make(
+        "PushT-WithObstacles-v1",
+        obs_mode="state_dict",
+        control_mode="pd_ee_delta_pose",
+    )
+    wrapper = ManiSkillPlanningWrapper(env, adapter=PushTTaskAdapter())
+    obs, _ = wrapper.reset(seed=seed)
+    problem_str, subgoals = subgoals_from_wrapper(wrapper, obs, model=model, temperature=temperature, offline=offline, use_llm_first=use_llm_first)
     wrapper.close()
     return problem_str, subgoals
 
@@ -74,11 +82,17 @@ def run_dummy(model: str = "gemini-2.5-flash", temperature: float = 0.0, offline
     Produce (PDDL_problem_str, subgoals) using a dummy state (no env).
     Useful to sanity-check planner logic without ManiSkill running.
     """
-    tee_xy = np.array([0.0, 0.0])
-    goal_xy = np.array([0.08, -0.08])
+    tee_xy = np.array([0.0, 0.0])       # → r_5_5
+    goal_xy = np.array([0.09, -0.09])   # → r_3_6
     ee_xy = np.array([-0.02, 0.0])
-    n = GRID * GRID
-    block_regions = [0, 1, 2, 3, 4, n // 4, n // 2, 3 * n // 4, n - 8, n - 1]
+    # Wall of 4 blocks across row 4 cols 4-7, directly between tee and goal.
+    # Planner must pick one up rather than take a long detour.
+    block_regions = [
+        4 * GRID + 4,  # r_4_4
+        4 * GRID + 5,  # r_4_5
+        4 * GRID + 6,  # r_4_6
+        4 * GRID + 7,  # r_4_7
+    ]
 
     domain_path = os.path.join(os.path.dirname(__file__), "domain_pusht.pddl")
     problem_str = state_to_problem(tee_xy, goal_xy, ee_xy, block_regions)
@@ -113,6 +127,7 @@ def main(argv=None):
     ap.add_argument("--verbose", action="store_true", help="Print state summary and full PDDL problem")
     ap.add_argument("--model", default="gemini-2.5-flash", help="Gemini model name")
     ap.add_argument("--temperature", type=float, default=0.0)
+    ap.add_argument("--seed", type=int, default=0, help="Random seed for env reset (--live only)")
     args = ap.parse_args(argv)
 
     if args.live:
@@ -121,6 +136,7 @@ def main(argv=None):
             temperature=args.temperature,
             offline=args.offline,
             use_llm_first=args.llm,
+            seed=args.seed,
         )
     else:
         problem_str, subgoals = run_dummy(
