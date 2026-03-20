@@ -41,3 +41,12 @@ Thumbs.db
 
 runs/
 
+# Checkpoints (except final)
+checkpoints/**/ckpt_*.pt
+checkpoints/**/events.out.*
+checkpoints/**/eval_videos/trajectory.h5
+checkpoints/**/eval_videos/trajectory.json
+
+# Keep final checkpoints and eval videos
+!checkpoints/**/final_ckpt.pt
+!checkpoints/**/eval_videos/*.mp4
