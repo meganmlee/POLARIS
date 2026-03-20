@@ -184,15 +184,78 @@ def _bfs_path(start: int, goal: int, blocked: set) -> list:
     return []
 
 
+def _parse_block_info(problem_str: str) -> tuple[dict, set, set]:
+    """Parse block positions, pickable set, and push-only set from a problem string."""
+    positions = {
+        m.group(1): _name_to_idx(m.group(2))
+        for m in re.finditer(r"\(block-at (block\d+) (r_\d+_\d+)\)", problem_str)
+    }
+    pickable  = {m.group(1) for m in re.finditer(r"\(pickable (block\d+)\)", problem_str)}
+    push_only = {m.group(1) for m in re.finditer(r"\(push-only (block\d+)\)", problem_str)}
+    return positions, pickable, push_only
+
+
+def _clear_path_subgoals(tee_r: int, goal_r: int, blocked: set, problem_str: str) -> list[dict]:
+    """
+    When no tee→goal path exists around blocks, generate pick/place or push_cube
+    subgoals to clear the blocks sitting on the direct (unblocked) tee→goal route.
+    After these subgoals the executor re-plans, at which point a free path should exist.
+    """
+    direct_path = _bfs_path(tee_r, goal_r, set())
+    if not direct_path:
+        return []
+
+    path_cells = set(direct_path)
+    positions, pickable, push_only = _parse_block_info(problem_str)
+    adj = _adjacency()
+
+    subgoals = []
+    for block_name, block_region in positions.items():
+        if block_region not in path_cells:
+            continue
+
+        # Preferred drop zone: adjacent to block, not on path, not already blocked
+        drop = next(
+            (n for n in adj[block_region] if n not in path_cells and n not in blocked),
+            next((n for n in adj[block_region] if n not in blocked), None),
+        )
+
+        subgoals.append({
+            "skill": "reach",
+            "state": f"(robot-at robot1 {_region_to_name(block_region)})",
+        })
+
+        if block_name in pickable:
+            subgoals.append({"skill": "pick",  "state": f"(holding robot1 {block_name})"})
+            if drop is not None:
+                subgoals.append({"skill": "place", "state": f"(block-at {block_name} {_region_to_name(drop)})"})
+        elif block_name in push_only and drop is not None:
+            subgoals.append({"skill": "push_cube", "state": f"(block-at {block_name} {_region_to_name(drop)})"})
+
+    return subgoals
+
+
 def compute_subgoals(problem_str: str) -> list[dict]:
     tee_r, goal_r, robot_r, blocked = _parse_problem_regions(problem_str)
     path_robot_to_tee = _bfs_path(robot_r, tee_r, blocked)
-    path_tee_to_goal = _bfs_path(tee_r, goal_r, blocked)
+    path_tee_to_goal  = _bfs_path(tee_r, goal_r, blocked)
     subgoals = []
     if path_robot_to_tee and path_robot_to_tee[-1] == tee_r:
         subgoals.append({"skill": "reach", "state": f"(robot-at robot1 {_region_to_name(tee_r)})"})
-    for i in range(1, len(path_tee_to_goal)):
-        subgoals.append({"skill": "push_tee", "state": f"(object-at tee {_region_to_name(path_tee_to_goal[i])})"})
+    if path_tee_to_goal:
+        for i in range(1, len(path_tee_to_goal)):
+            subgoals.append({"skill": "push_tee", "state": f"(object-at tee {_region_to_name(path_tee_to_goal[i])})"})
+    else:
+        # All routes blocked — emit clearing subgoals for blocks on the direct path,
+        # then append push_tee steps using a BFS path with those blocks removed.
+        subgoals.extend(_clear_path_subgoals(tee_r, goal_r, blocked, problem_str))
+        direct_path = _bfs_path(tee_r, goal_r, set())
+        cleared_cells = set(direct_path) & blocked
+        new_path = _bfs_path(tee_r, goal_r, blocked - cleared_cells)
+        if new_path and len(new_path) >= 2:
+            subgoals.append({"skill": "reach", "state": f"(robot-at robot1 {_region_to_name(tee_r)})"})
+            for i in range(1, len(new_path)):
+                subgoals.append({"skill": "push_tee", "state": f"(object-at tee {_region_to_name(new_path[i])})"})
     if not subgoals and path_tee_to_goal and path_tee_to_goal[0] != goal_r:
         subgoals.append({"skill": "push_tee", "state": f"(object-at tee {_region_to_name(goal_r)})"})
     return subgoals

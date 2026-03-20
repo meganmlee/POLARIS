@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import os
+from pathlib import Path
 import random
 import time
 from dataclasses import dataclass
@@ -140,6 +141,97 @@ class Agent(nn.Module):
         return action, dist.log_prob(action).sum(1), dist.entropy().sum(1), self.critic(x)
 
 
+# ---------------------------------------------------------------------------
+# Callable skill API
+# ---------------------------------------------------------------------------
+
+def _build_place_obs(obs: dict, raw_env, obstacle, goal_xyz: np.ndarray) -> np.ndarray:
+    """
+    Reconstruct the flat state obs that PlaceSkillEnv produces during training.
+    Layout: qpos(9) + qvel(9) + is_grasped(1) + tcp_pose(7) + goal_pos(3)
+            + obj_pose(7) + tcp_to_obj_pos(3) + obj_to_goal_pos(3) = 42
+    """
+    qpos      = np.asarray(obs["agent"]["qpos"], dtype=np.float32).reshape(-1)
+    qvel      = np.asarray(obs["agent"]["qvel"], dtype=np.float32).reshape(-1)
+    is_grasped = np.array(
+        [float(raw_env.agent.is_grasping(obstacle).cpu().numpy().any())], dtype=np.float32
+    )
+    tcp_pose  = raw_env.agent.tcp_pose.raw_pose.cpu().numpy().reshape(-1).astype(np.float32)  # 7
+    goal      = goal_xyz.astype(np.float32).reshape(-1)[:3]
+    obj_pose  = obstacle.pose.raw_pose.cpu().numpy().reshape(-1).astype(np.float32)           # 7
+    tcp_pos   = tcp_pose[:3]
+    obj_pos   = obj_pose[:3]
+    return np.concatenate([
+        qpos, qvel, is_grasped, tcp_pose, goal, obj_pose,
+        obj_pos - tcp_pos,  # tcp_to_obj_pos
+        goal - obj_pos,     # obj_to_goal_pos
+    ])
+
+
+def execute(
+    env,
+    obs: dict,
+    block_idx: int,
+    goal_xyz: np.ndarray,
+    checkpoint: str,
+    max_steps: int = 200,
+    render: bool = False,
+    device: str = "cpu",
+) -> tuple[bool, dict]:
+    """
+    Run the PPO place policy on an already-running PushT env to set
+    obstacle[block_idx] down at goal_xyz, then retreat.
+    Requires a checkpoint trained on PlaceSkillEnv with obs_mode='state'.
+    Returns (success, latest_obs).
+    """
+    import types
+    raw      = env.unwrapped
+    obstacle = raw.obstacles[block_idx]
+
+    PLACE_THRESH  = 0.025
+    RETREAT_DIST  = 0.10
+    REST_Z_THRESH = 0.03   # obstacle half-sizes range 0.015-0.025; +0.01 margin
+
+    state_dict = torch.load(checkpoint, map_location=device, weights_only=True)
+    obs_dim = state_dict["actor_mean.0.weight"].shape[1]
+    act_dim = state_dict["actor_mean.6.weight"].shape[0]
+    env_ns  = types.SimpleNamespace(
+        single_observation_space=types.SimpleNamespace(shape=(obs_dim,)),
+        single_action_space=types.SimpleNamespace(shape=(act_dim,)),
+    )
+    agent = Agent(env_ns).to(device)
+    agent.load_state_dict(state_dict)
+    agent.eval()
+
+    action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
+    action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
+
+    def _check_success():
+        is_grasped   = bool(raw.agent.is_grasping(obstacle).cpu().numpy().any())
+        obj_pos      = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
+        tcp_pos      = raw.agent.tcp_pose.p.cpu().numpy().reshape(-1).astype(np.float32)
+        obj_to_goal  = float(np.linalg.norm(obj_pos[:2] - goal_xyz[:2]))
+        is_placed    = (not is_grasped) and (obj_to_goal < PLACE_THRESH) and (obj_pos[2] < REST_Z_THRESH)
+        is_retreated = float(np.linalg.norm(tcp_pos - obj_pos)) > RETREAT_DIST
+        return bool(is_placed and is_retreated)
+
+    current_obs = obs
+    for _ in range(max_steps):
+        flat  = _build_place_obs(current_obs, raw, obstacle, goal_xyz)
+        obs_t = torch.from_numpy(flat).float().unsqueeze(0).to(device)
+        with torch.no_grad():
+            action = torch.clamp(agent.get_action(obs_t, deterministic=True), action_low, action_high)
+        current_obs, _, term, trunc, _ = env.step(action)
+        if render:
+            env.render()
+        if _check_success():
+            return True, current_obs
+        if np.asarray(term).any() or np.asarray(trunc).any():
+            break
+
+    return _check_success(), current_obs
+
+
 if __name__ == "__main__":
     import tyro
     args = tyro.cli(Args)
@@ -148,6 +240,7 @@ if __name__ == "__main__":
     args.minibatch_size = args.batch_size // args.num_minibatches
     args.num_iterations = args.total_timesteps // args.batch_size
     run_name = args.exp_name or f"{args.env_id}__{args.seed}__{int(time.time())}"
+    run_dir = str(Path(__file__).resolve().parents[2] / "checkpoints" / run_name)
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -169,7 +262,7 @@ if __name__ == "__main__":
 
     _eval_run = [0]  # mutable counter used by the eval video trigger closure
     if args.capture_video:
-        eval_output_dir = f"runs/{run_name}/eval_videos"
+        eval_output_dir = f"{run_dir}/eval_videos"
         if args.evaluate:
             assert args.checkpoint is not None
             eval_output_dir = f"{os.path.dirname(args.checkpoint)}/eval_videos"
@@ -216,7 +309,7 @@ if __name__ == "__main__":
         envs.close(); eval_envs.close()
         exit()
 
-    writer = SummaryWriter(f"runs/{run_name}")
+    writer = SummaryWriter(run_dir)
     writer.add_text("hyperparameters", str(vars(args)))
     print(f"Training {args.env_id}  envs={args.num_envs}  batch={args.batch_size}  iters={args.num_iterations}")
 
@@ -369,12 +462,12 @@ if __name__ == "__main__":
                 print(f"    eval_{k}={mean:.4f}")
 
         if args.save_model and iteration % args.eval_freq == 1:
-            os.makedirs(f"runs/{run_name}", exist_ok=True)
-            torch.save(agent.state_dict(), f"runs/{run_name}/ckpt_{iteration}.pt")
+            os.makedirs(run_dir, exist_ok=True)
+            torch.save(agent.state_dict(), f"{run_dir}/ckpt_{iteration}.pt")
 
     if args.save_model:
-        os.makedirs(f"runs/{run_name}", exist_ok=True)
-        path = f"runs/{run_name}/final_ckpt.pt"
+        os.makedirs(run_dir, exist_ok=True)
+        path = f"{run_dir}/final_ckpt.pt"
         torch.save(agent.state_dict(), path)
         print(f"Saved to {path}")
 

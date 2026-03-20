@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import os
+from pathlib import Path
 import random
 import time
 from dataclasses import dataclass
@@ -205,6 +206,7 @@ if __name__ == "__main__":
     args.minibatch_size = args.batch_size // args.num_minibatches
     args.num_iterations = args.total_timesteps // args.batch_size
     run_name = args.exp_name or f"{args.env_id}__{args.seed}__{int(time.time())}"
+    run_dir = str(Path(__file__).resolve().parents[2] / "checkpoints" / run_name)
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -226,7 +228,7 @@ if __name__ == "__main__":
 
     _eval_run = [0]  # mutable counter used by the eval video trigger closure
     if args.capture_video:
-        eval_output_dir = f"runs/{run_name}/eval_videos"
+        eval_output_dir = f"{run_dir}/eval_videos"
         if args.evaluate:
             eval_output_dir = f"{os.path.dirname(args.checkpoint)}/eval_videos"
        
@@ -272,7 +274,7 @@ if __name__ == "__main__":
         envs.close(); eval_envs.close()
         exit()
 
-    writer = SummaryWriter(f"runs/{run_name}")
+    writer = SummaryWriter(run_dir)
     writer.add_text("hyperparameters", str(vars(args)))
     print(f"Training {args.env_id}  envs={args.num_envs}  batch={args.batch_size}  iters={args.num_iterations}")
 
@@ -426,12 +428,12 @@ if __name__ == "__main__":
                 print(f"    eval_{k}={mean:.4f}")
 
         if args.save_model and iteration % args.eval_freq == 1:
-            os.makedirs(f"runs/{run_name}", exist_ok=True)
-            torch.save(agent.state_dict(), f"runs/{run_name}/ckpt_{iteration}.pt")
+            os.makedirs(run_dir, exist_ok=True)
+            torch.save(agent.state_dict(), f"{run_dir}/ckpt_{iteration}.pt")
 
     if args.save_model:
-        os.makedirs(f"runs/{run_name}", exist_ok=True)
-        path = f"runs/{run_name}/final_ckpt.pt"
+        os.makedirs(run_dir, exist_ok=True)
+        path = f"{run_dir}/final_ckpt.pt"
         torch.save(agent.state_dict(), path)
         print(f"Saved to {path}")
 

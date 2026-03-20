@@ -85,14 +85,9 @@ def run_dummy(model: str = "gemini-2.5-flash", temperature: float = 0.0, offline
     tee_xy = np.array([0.0, 0.0])       # → r_5_5
     goal_xy = np.array([0.09, -0.09])   # → r_3_6
     ee_xy = np.array([-0.02, 0.0])
-    # Wall of 4 blocks across row 4 cols 4-7, directly between tee and goal.
-    # Planner must pick one up rather than take a long detour.
-    block_regions = [
-        4 * GRID + 4,  # r_4_4
-        4 * GRID + 5,  # r_4_5
-        4 * GRID + 6,  # r_4_6
-        4 * GRID + 7,  # r_4_7
-    ]
+    # Full wall across all of row 4 (cols 0-9) — seals every path from row 5 to row 3,
+    # forcing the planner to clear blocks rather than route around them.
+    block_regions = [4 * GRID + c for c in range(GRID)]  # r_4_0 … r_4_9
 
     domain_path = os.path.join(os.path.dirname(__file__), "domain_pusht.pddl")
     problem_str = state_to_problem(tee_xy, goal_xy, ee_xy, block_regions)

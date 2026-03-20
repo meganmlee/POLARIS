@@ -26,12 +26,18 @@ class PushTWithObstaclesEnv(PushTEnv):
     def __init__(self, *args, robot_uids="panda", **kwargs):
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
 
-    # (half_size, rgba) for each obstacle
+    # (half_size, rgba) for each obstacle — up to 10 cubes
     OBSTACLE_SPECS = [
-        (0.02, [0.2, 0.6, 0.2, 1.0]),
+        (0.020, [0.2, 0.6, 0.2, 1.0]),
         (0.015, [0.2, 0.4, 0.8, 1.0]),
         (0.025, [0.8, 0.4, 0.2, 1.0]),
         (0.018, [0.6, 0.2, 0.6, 1.0]),
+        (0.022, [0.9, 0.8, 0.1, 1.0]),
+        (0.017, [0.1, 0.8, 0.8, 1.0]),
+        (0.020, [0.8, 0.2, 0.2, 1.0]),
+        (0.015, [0.5, 0.5, 0.9, 1.0]),
+        (0.023, [0.9, 0.5, 0.1, 1.0]),
+        (0.018, [0.4, 0.9, 0.4, 1.0]),
     ]
 
     @property
@@ -58,27 +64,64 @@ class PushTWithObstaclesEnv(PushTEnv):
             )
             self.obstacles.append(cube)
 
+    # How many obstacles to place each episode: uniformly sampled from this range (inclusive).
+    MIN_OBSTACLES: int = 5
+    MAX_OBSTACLES: int = 10
+    # Table half-extent (must stay within this XY radius of origin)
+    TABLE_HALF: float = 0.25
+    # Minimum distance between an obstacle and the tee centre
+    MIN_DIST_FROM_TEE: float = 0.06
+    # Minimum distance between two obstacles
+    MIN_DIST_BETWEEN: float = 0.05
+
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         super()._initialize_episode(env_idx, options)
         with torch.device(self.device):
             b = len(env_idx)
-            tee_pos = self.tee.pose.p[env_idx]  # (b, 3) — only the envs being reset
-            # Place obstacles around the table (offsets from tee so they don't overlap T)
-            offsets_xy = [
-                (0.08, 0.10),
-                (-0.06, 0.12),
-                (0.10, -0.08),
-                (-0.10, -0.06),
-            ]
+            tee_pos = self.tee.pose.p[env_idx]  # (b, 3)
+            q_id = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0)
+
+            # Randomly choose how many obstacles to place this episode (same count for all envs in batch)
+            n_active = int(torch.randint(self.MIN_OBSTACLES, self.MAX_OBSTACLES + 1, (1,)).item())
+
+            placed_xy: list[torch.Tensor] = []  # (b, 2) tensors for collision checking
+
             for i, cube in enumerate(self.obstacles):
                 half = self.OBSTACLE_SPECS[i][0]
-                dx, dy = offsets_xy[i] if i < len(offsets_xy) else (0.05, 0.05)
-                xyz = tee_pos.clone()
-                xyz[:, 0] += dx
-                xyz[:, 1] += dy
-                xyz[:, 2] = half
-                q = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).expand(b, 4)
-                pose = Pose.create_from_pq(p=xyz, q=q)
+
+                if i < n_active:
+                    # Sample random XY positions with rejection for each env independently
+                    xy = torch.zeros((b, 2), device=self.device)
+                    for env_i in range(b):
+                        tee_xy = tee_pos[env_i, :2]
+                        for _ in range(50):
+                            candidate = (torch.rand(2, device=self.device) * 2 - 1) * self.TABLE_HALF
+                            # Reject if too close to tee
+                            if torch.norm(candidate - tee_xy) < self.MIN_DIST_FROM_TEE:
+                                continue
+                            # Reject if too close to any already-placed obstacle
+                            too_close = any(
+                                torch.norm(candidate - p[env_i]) < self.MIN_DIST_BETWEEN
+                                for p in placed_xy
+                            )
+                            if too_close:
+                                continue
+                            xy[env_i] = candidate
+                            break
+                        else:
+                            # Fallback: fixed offset if sampling fails
+                            fallback = [(0.08, 0.10), (-0.06, 0.12), (0.10, -0.08), (-0.10, -0.06)]
+                            dx, dy = fallback[i % len(fallback)]
+                            xy[env_i] = tee_xy + torch.tensor([dx, dy], device=self.device)
+
+                    placed_xy.append(xy)
+                    xyz = torch.cat([xy, torch.full((b, 1), half, device=self.device)], dim=1)
+                else:
+                    # Park inactive obstacles off-table so they don't interfere
+                    park_x = 0.5 + i * 0.05
+                    xyz = torch.tensor([[park_x, 0.0, half]], device=self.device).expand(b, 3)
+
+                pose = Pose.create_from_pq(p=xyz, q=q_id.expand(b, 4))
                 cube.set_pose(pose)
 
 
@@ -149,8 +192,8 @@ class PushCubeWithObstaclesEnv(PushTWithObstaclesEnv):
             self.goal_obstacle_idx[env_idx] = torch.randint(
                 len(self.obstacles), (b,), device=self.device)
 
-            # Sample goal XY on table surface (stored as 3-D with z=0)
-            goal_xy = (torch.rand((b, 2), device=self.device) * 2 - 1) * 0.15
+            # Sample goal XY across the full table (matches the planner grid ±0.30 m)
+            goal_xy = (torch.rand((b, 2), device=self.device) * 2 - 1) * self.TABLE_HALF
             if not hasattr(self, "goal_pos") or self.goal_pos.shape[0] != self.num_envs:
                 self.goal_pos = torch.zeros((self.num_envs, 3), device=self.device)
             self.goal_pos[env_idx] = torch.cat(
