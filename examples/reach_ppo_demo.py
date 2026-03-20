@@ -1,12 +1,12 @@
 """
-Visualize the trained PPO policy for MoveGoal-WithObstacles-v1.
+Visualize the trained PPO policy for Reach-WithObstacles-v1.
 
 Loads the final checkpoint from reach_ppo.py and runs a single episode
 with live rendering.
 
 Run:
     python examples/reach_ppo_demo.py
-    python examples/reach_ppo_demo.py --checkpoint runs/MoveGoal-WithObstacles-v1__1__<timestamp>/final_ckpt.pt
+    python examples/reach_ppo_demo.py --checkpoint runs/Reach-WithObstacles-v1__1__<timestamp>/final_ckpt.pt
 """
 
 import argparse
@@ -24,14 +24,14 @@ import torch
 
 from mani_skill.utils.wrappers.flatten import FlattenActionSpaceWrapper
 
-import envs  # noqa: F401 — registers MoveGoal-WithObstacles-v1
+import envs  # noqa: F401 — registers Reach-WithObstacles-v1
 
 # Import Agent from reach_ppo without running its __main__ block
 sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "reach"))
 from reach_ppo import Agent  # noqa: E402
 
 
-DEFAULT_CHECKPOINT = "runs/MoveGoal-WithObstacles-v1__1__<timestamp>/final_ckpt.pt"
+DEFAULT_CHECKPOINT = "runs/Reach-WithObstacles-v1__1__<timestamp>/final_ckpt.pt"
 MAX_STEPS = 200
 
 
@@ -49,7 +49,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     env = gym.make(
-        "MoveGoal-WithObstacles-v1",
+        "Reach-WithObstacles-v1",
         obs_mode="state",
         control_mode="pd_ee_delta_pose",
         render_mode="human",

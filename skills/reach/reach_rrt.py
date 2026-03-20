@@ -29,7 +29,7 @@ from scipy.interpolate import CubicSpline
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-import envs  # registers MoveGoal-WithObstacles-v1
+import envs  # registers Reach-WithObstacles-v1
 
 
 JOINT_LOWER = np.array([-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973])
@@ -233,6 +233,54 @@ def solve_ik(
     return None
 
 # ---------------------------------------------------------------------------
+# Callable skill API
+# ---------------------------------------------------------------------------
+
+def execute(
+    env,
+    obs: dict,
+    goal_xyz: np.ndarray,
+    max_iter: int = 2000,
+    step_size: float = 0.10,
+    goal_threshold: float = 0.05,
+    num_traj_points: int = 150,
+    render: bool = False,
+) -> tuple[bool, dict]:
+    """
+    Move the EE to goal_xyz on an already-running env.
+
+    Returns (success, latest_obs). Success is True if the EE lands within
+    5 cm of the target after executing the trajectory.
+    """
+    root = env.unwrapped
+    q_start = np.asarray(obs["agent"]["qpos"], dtype=np.float32).reshape(-1)[:7]
+
+    q_goal = solve_ik(root, goal_xyz, q_start)
+    if q_goal is None:
+        return False, obs
+
+    planner = RRTConnect(q_start, q_goal, max_iter=max_iter, step_size=step_size, goal_threshold=goal_threshold)
+    path = planner.plan()
+    traj = smooth_path_spline(path, num_points=num_traj_points)
+
+    act_dim = env.action_space.shape[0]
+    gripper_pad = np.zeros(act_dim - 7, dtype=np.float32) + 0.04
+
+    current_obs = obs
+    for q in traj:
+        action = torch.tensor(np.concatenate([q, gripper_pad]), dtype=torch.float32).unsqueeze(0)
+        current_obs, _, term, trunc, _ = env.step(action)
+        if render:
+            env.render()
+        if np.asarray(term).any() or np.asarray(trunc).any():
+            break
+
+    final_ee = np.asarray(current_obs["extra"]["tcp_pose"], dtype=np.float32).reshape(-1)[:3]
+    success = bool(np.linalg.norm(final_ee - goal_xyz) < 0.05)
+    return success, current_obs
+
+
+# ---------------------------------------------------------------------------
 # Evaluation loop
 # ---------------------------------------------------------------------------
 
@@ -240,7 +288,7 @@ def run_eval(args):
     np.random.seed(args.seed)
 
     env = gym.make(
-        "MoveGoal-WithObstacles-v1",
+        "Reach-WithObstacles-v1",
         num_envs=1,
         obs_mode="state_dict",
         control_mode="pd_joint_pos",
@@ -314,7 +362,7 @@ def run_eval(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="RRT-Connect eval for MoveGoal-WithObstacles-v1")
+    parser = argparse.ArgumentParser(description="RRT-Connect eval for Reach-WithObstacles-v1")
     parser.add_argument("--num_episodes",    type=int,   default=10)
     parser.add_argument("--seed",            type=int,   default=0)
     parser.add_argument("--max_iter",        type=int,   default=2000)

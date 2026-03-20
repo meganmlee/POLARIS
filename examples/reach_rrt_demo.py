@@ -1,5 +1,5 @@
 """
-Visualize the RRT-Connect policy for MoveGoal-WithObstacles-v1.
+Visualize the RRT-Connect policy for Reach-WithObstacles-v1.
 
 Runs a single episode using numerical IK and RRT-Connect planning
 with live rendering.
@@ -21,7 +21,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 
-import envs  # noqa: F401 — registers MoveGoal-WithObstacles-v1
+import envs  # noqa: F401 — registers Reach-WithObstacles-v1
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "reach"))
 from reach_rrt import RRTConnect, solve_ik, smooth_path_spline  # noqa: E402
@@ -35,7 +35,7 @@ def main():
     args = parser.parse_args()
 
     env = gym.make(
-        "MoveGoal-WithObstacles-v1",
+        "Reach-WithObstacles-v1",
         obs_mode="state_dict",        # required for IK state extraction
         control_mode="pd_joint_pos",  # required for joint-space execution
         render_mode="human",
