@@ -223,9 +223,9 @@ SUBGOAL_PDDL_FIRST=1 python high_level_planner/llm_plan.py --live  # symbolic pl
 
 Example output:
 ```
-reach (robot-at r_5_5)
-push_tee (object-at r_4_5)
-push_tee (object-at goal)
+reach	(robot-at robot1 r_5_5)
+push_tee	(object-at tee r_4_5)
+push_tee	(object-at tee r_3_5)
 ```
 
 ### `env_subgoal_runner.py` — State Builder
@@ -258,7 +258,7 @@ Checkpoint args accept either a full path or a run name under `checkpoints/` (e.
 
 ### `domain_pusht.pddl` — PDDL Domain
 
-Defines the world model used by the symbolic planner: types (robot, object, grid cells), predicates (`robot-at`, `object-at`, `clear`), and actions (`reach`, `push_tee`, `pick`, `place`, `push_cube`).
+Defines the world model used by the symbolic planner: types (`robot`, `tee`, `obstacle`, `region`), predicates (`robot-at`, `object-at`, `obstacle-at`, `holding`, `pickable`, `push-only`, `clear`, `adjacent`), and actions (`reach`, `push_tee`, `pick`, `place`, `push_cube`).
 
 ### `config.json.example` — Gemini Config Template
 
