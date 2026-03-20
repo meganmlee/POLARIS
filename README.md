@@ -48,10 +48,11 @@ POLARIS/
 ├── high_level_planner/            # LLM-based subgoal generation
 │   ├── llm_plan.py                # PDDL problem builder + LLM/symbolic/BFS planner
 │   ├── env_subgoal_runner.py      # Live env or dummy state → subgoals
+│   ├── executor.py                # Closed-loop executor: plan → execute skill → re-plan
 │   ├── domain_pusht.pddl          # PDDL domain (actions, predicates)
 │   └── config.json.example        # Gemini API config template
 ├── planning_wrapper/              # State clone/restore utilities for planning backends
-└── runs/                          # Training checkpoints (auto-created)
+└── checkpoints/                          # Training checkpoints (auto-created)
 ```
 
 ## Installation
@@ -146,7 +147,7 @@ python push_cube_ppo.py \
 # Evaluate a checkpoint
 python push_cube_ppo.py \
     --evaluate \
-    --checkpoint runs/PushCube-WithObstacles-v1__1__<timestamp>/final_ckpt.pt
+    --checkpoint checkpoints/PushCube-WithObstacles-v1__1__<timestamp>/final_ckpt.pt
 ```
 ![Evaluation will produce videos](image.png)
 
@@ -165,13 +166,13 @@ python skills/push_cube/push_cube_rrt.py
 ```bash
 # Reach
 python examples/reach_demo.py        # proportional controller baseline
-python examples/reach_ppo_demo.py --checkpoint runs/<run>/final_ckpt.pt  # PPO policy
+python examples/reach_ppo_demo.py --checkpoint checkpoints/<run>/final_ckpt.pt  # PPO policy
 python examples/reach_rrt_demo.py    # RRT* planner
-python examples/reach_ppo_demo.py --checkpoint runs/<run>/final_ckpt.pt --seed 10 # change seed randomization (default 5)
+python examples/reach_ppo_demo.py --checkpoint checkpoints/<run>/final_ckpt.pt --seed 10 # change seed randomization (default 5)
 
 # PushCube
 python examples/push_cube_ppo_demo.py
-python examples/push_cube_ppo_demo.py --checkpoint runs/<run>/final_ckpt.pt
+python examples/push_cube_ppo_demo.py --checkpoint checkpoints/<run>/final_ckpt.pt
 
 # PushT
 python examples/pusht_obstacles_demo.py
@@ -198,203 +199,75 @@ wrapper.restore_state(snapshot)    # backtrack
 
 Available adapters: `PushTTaskAdapter`, `ShelfRetrieveTaskAdapter`.
 
+## High-Level Planner
 
+The `high_level_planner/` module handles LLM-based subgoal generation and closed-loop execution.
 
-## Subgoal generation running
+### `llm_plan.py` — Subgoal Planner
 
-## 1. `high_level_planner/llm_plan.py` (The Planner)
+Converts the current simulation state into a discretized grid representation (PDDL-style), then generates a subgoal sequence using one of three methods in priority order:
 
-This file is the **brain**.
+1. **Gemini** — queries an LLM for a natural-language plan, grounded to PDDL predicates
+2. **pyperplan** — falls back to a symbolic PDDL planner if the LLM is unavailable or fails
+3. **BFS** — last-resort graph search over the discretized state space
 
-It takes a simple input:
-- Where the object (tee) is
-- Where the goal is
-- Where the robot hand is
-- Where obstacles are
+The LLM plan is validated and corrected against the symbolic planner output when both are available.
 
-Then it:
+```bash
+python high_level_planner/llm_plan.py              # LLM + symbolic fallback
+python high_level_planner/llm_plan.py --offline    # BFS only (no API needed)
+python high_level_planner/llm_plan.py --live       # read state from running simulator
+python high_level_planner/llm_plan.py --live --llm # LLM only, skip symbolic planner
+SUBGOAL_PDDL_FIRST=1 python high_level_planner/llm_plan.py --live  # symbolic planner first
+```
 
-### Step 1: Converts everything into a grid
-- Breaks the table into small boxes (like graph paper)
-- Figures out which box everything is in
-
-### Step 2: Tries to make a plan (subgoals)
-
-It tries **3 methods (in order):**
-
-1. **Gemini (AI model)**
-   - Asks AI: "What steps should I take?"
-   - AI gives a list like:
-     - move here
-     - push object
-     - etc.
-
-2. **If AI fails → use pyperplan (symbolic planner)**
-   - This is a strict rule-based planner
-   - It computes a valid step-by-step plan
-
-3. **If that also fails → use BFS**
-   - Very basic search
-   - Just finds *some* way to reach goal
-
-### Step 3: Fix the plan
-- If both AI and planner exist:
-  - It adjusts AI steps to make them logically correct
-
-### Output:
-A list like:
-
-reach (robot-at r_5_5)
-push_tee (object-at r_4_5)
-
-
----
-
-## 2. `high_level_planner/env_subgoal_runner.py` (The Runner)
-
-This file is the **input builder + executor**.
-
-### Two modes:
-
-#### (A) `--live` (real simulator)
-- Runs a robot simulation (ManiSkill)
-- Reads:
-  - object position
-  - goal position
-  - robot hand position
-  - obstacles
-
-#### (B) No flag (default)
-- Uses fake/dummy data
-- No simulator needed
-
-### What it does:
-1. Gets the current state
-2. Sends it to the planner (`llm_plan.py`)
-3. Prints the subgoals
-
----
-
-## 3. `high_level_planner/domain_pusht.pddl` (Rules File)
-
-This file defines the **rules of the world**.
-
-### It tells:
-- What things exist:
-  - robot, object, blocks, grid cells
-
-- What is true/false:
-  - robot-at
-  - object-at
-  - clear space
-
-- What actions are allowed:
-  - reach → move robot hand
-  - push_tee → push object
-  - pick → pick object
-  - place → place object
-  - push_cube → move obstacle
-
-Think of it like:
-> "What moves are legal in this game?"
-
----
-
-## 4. `high_level_planner/config.json.example` (Settings Template)
-
-This is just a **template file**.
-
-Used for:
-- Connecting to Gemini (Google AI)
-
-You need to fill:
-- project ID
-- location
-
-OR set them as environment variables
-
----
-
-# Setup (Very Simple)
-
-From project folder:
-
-### Install Gemini support if not already:
-
-pip install google-cloud-aiplatform
-
-
-### Install ManiSkill (if not already)
-- Needed for simulation
-
-### Set config (one of these):
-
-#### Option 1 (env vars):
-
-export VERTEX_PROJECT=your_project
-export VERTEX_LOCATION=us-central1
-
-
-#### Option 2 (file):
-- Copy config.json.example → config.json
-- Fill values
-
----
-
-# How to Run
-
-## 1. Simple test (no AI, no planner)
-
-python high_level_planner/llm_plan.py --offline
-
-- Uses only BFS
-- Good for debugging
-
----
-
-## 2. Normal run (AI + fallback planner)
-
-python high_level_planner/llm_plan.py
-
-
----
-
-## 3. Run with simulator
-
-python high_level_planner/llm_plan.py --live
-
-
----
-
-## 4. Only AI (skip planner)
-
-python high_level_planner/llm_plan.py --live --llm
-
-
----
-
-## 5. Force planner first
-
-SUBGOAL_PDDL_FIRST=1 python high_level_planner/llm_plan.py --live
-
-
----
-
-# What Output Looks Like
-
-You will see steps like:
-
+Example output:
+```
 reach (robot-at r_5_5)
 push_tee (object-at r_4_5)
 push_tee (object-at goal)
+```
 
+### `env_subgoal_runner.py` — State Builder
 
-Meaning:
-- move robot
-- push object
-- reach goal
+Reads the current environment state (object, goal, robot hand, obstacles) and feeds it to `llm_plan.py`. Run with `--live` to use a real ManiSkill simulator, or without flags to use dummy state for offline testing.
 
----
+### `executor.py` — Closed-Loop Executor
+
+Ties the planner and skill library into a full execution loop: plan → dispatch skill → detect failure → re-plan.
+
+**Supported skills:** `reach` (RRT* or PPO), `pick` (PPO), `place` (PPO), `push_cube` (PPO)
+
+```bash
+# PPO reach skill (checkpoint required)
+python high_level_planner/executor.py --seed 42 --checkpoint MoveGoal-WithObstacles-v1__1__<timestamp>
+
+# RRT reach skill (no checkpoint needed)
+python high_level_planner/executor.py --seed 42 --skill rrt
+
+# Offline with RRT, limit replans
+python high_level_planner/executor.py --seed 3 --max_replans 5 --offline --skill rrt
+
+# Full multi-skill run
+python high_level_planner/executor.py --seed 0 \
+    --checkpoint MoveGoal-WithObstacles-v1__1__<ts> \
+    --push-cube-checkpoint PushCube-WithObstacles-v1__1__<ts>
+```
+
+Checkpoint args accept either a full path or a run name under `checkpoints/` (e.g. `MoveGoal-WithObstacles-v1__1__1773025568` expands to `checkpoints/.../final_ckpt.pt`).
+
+### `domain_pusht.pddl` — PDDL Domain
+
+Defines the world model used by the symbolic planner: types (robot, object, grid cells), predicates (`robot-at`, `object-at`, `clear`), and actions (`reach`, `push_tee`, `pick`, `place`, `push_cube`).
+
+### `config.json.example` — Gemini Config Template
+
+Copy to `config.json` and fill in your Vertex AI project and location, or set them as environment variables:
+
+```bash
+export VERTEX_PROJECT=your_project
+export VERTEX_LOCATION=us-central1
+```
 
 ## Requirements
 
@@ -405,9 +278,7 @@ Meaning:
 
 See [requirements.txt](requirements.txt) for the full dependency list.
 
-
-
 ## Contributors
-Megan Lee
-Tom Gao
-Abhishek Mathur
+- Abhishek Mathur
+- Megan Lee
+- Tom Gao
