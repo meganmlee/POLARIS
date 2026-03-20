@@ -2,30 +2,30 @@
 ; PDDL domain: PushT with obstacles (tabletop manipulation)
 ; =============================================================================
 ; TABLE: Grid of regions r_m_n (m=row, n=column). Goal = one of these regions.
-; BLOCKS: 10 obstacle blocks (block0..block9). Each block has a SIZE relative to
+; OBSTACLES: 10 obstacle cubes (obstacle0..obstacle9). Each obstacle has a SIZE relative to
 ;   the gripper/end-effector:
-;   - (pickable ?b): block is SMALLER than gripper → use PICK and PLACE to move
+;   - (pickable ?b): obstacle is SMALLER than gripper → use PICK and PLACE to move
 ;     it out of the way.
-;   - (push-only ?b): block is BIGGER than gripper → cannot pick; use PUSH_CUBE
+;   - (push-only ?b): obstacle is BIGGER than gripper → cannot pick; use PUSH_CUBE
 ;     to push it one cell out of the way.
-; The planner must figure out from (pickable blocki) and (push-only blockj) which
+; The planner must figure out from (pickable obstaclei) and (push-only obstaclej) which
 ; action to use for each obstacle. Main objective: get the tee to the goal region.
 ; =============================================================================
 
 (define (domain pusht)
   (:requirements :strips :typing)
-  (:types robot tee block region)
+  (:types robot tee obstacle region)
 
   (:predicates
     (robot-at ?r - robot ?loc - region)
     (object-at ?o - tee ?loc - region)
-    (block-at ?b - block ?loc - region)
-    (holding ?r - robot ?b - block)
+    (obstacle-at ?b - obstacle ?loc - region)
+    (holding ?r - robot ?b - obstacle)
     (goal-at ?loc - region)
     (clear ?loc - region)
     (adjacent ?loc1 ?loc2 - region)
-    (pickable ?b - block)
-    (push-only ?b - block))
+    (pickable ?b - obstacle)
+    (push-only ?b - obstacle))
 
   (:action reach
     :parameters (?rob - robot ?from ?to - region)
@@ -38,16 +38,16 @@
     :effect (and (object-at tee ?to) (not (object-at tee ?from)) (robot-at ?rob ?to) (not (robot-at ?rob ?from))))
 
   (:action pick
-    :parameters (?rob - robot ?b - block ?loc - region)
-    :precondition (and (pickable ?b) (robot-at ?rob ?loc) (block-at ?b ?loc) (not (holding ?rob ?b)))
-    :effect (and (holding ?rob ?b) (not (block-at ?b ?loc)) (clear ?loc)))
+    :parameters (?rob - robot ?b - obstacle ?loc - region)
+    :precondition (and (pickable ?b) (robot-at ?rob ?loc) (obstacle-at ?b ?loc) (not (holding ?rob ?b)))
+    :effect (and (holding ?rob ?b) (not (obstacle-at ?b ?loc)) (clear ?loc)))
 
   (:action place
-    :parameters (?rob - robot ?b - block ?loc - region)
+    :parameters (?rob - robot ?b - obstacle ?loc - region)
     :precondition (and (holding ?rob ?b) (robot-at ?rob ?loc) (clear ?loc))
-    :effect (and (block-at ?b ?loc) (not (holding ?rob ?b)) (not (clear ?loc))))
+    :effect (and (obstacle-at ?b ?loc) (not (holding ?rob ?b)) (not (clear ?loc))))
 
   (:action push_cube
-    :parameters (?rob - robot ?b - block ?from ?to - region)
-    :precondition (and (push-only ?b) (block-at ?b ?from) (robot-at ?rob ?from) (adjacent ?from ?to) (clear ?to))
-    :effect (and (block-at ?b ?to) (not (block-at ?b ?from)) (robot-at ?rob ?to) (not (robot-at ?rob ?from)) (clear ?from) (not (clear ?to)))))
+    :parameters (?rob - robot ?b - obstacle ?from ?to - region)
+    :precondition (and (push-only ?b) (obstacle-at ?b ?from) (robot-at ?rob ?from) (adjacent ?from ?to) (clear ?to))
+    :effect (and (obstacle-at ?b ?to) (not (obstacle-at ?b ?from)) (robot-at ?rob ?to) (not (robot-at ?rob ?from)) (clear ?from) (not (clear ?to)))))

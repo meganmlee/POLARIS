@@ -27,14 +27,7 @@ def subgoals_from_wrapper(wrapper, obs, model: str = "gemini-2.5-flash", tempera
             if pose is None and callable(getattr(obj, "get_pose", None)):
                 pose = obj.get_pose()
             if pose is not None:
-                if hasattr(pose, "p"):
-                    p = pose.p
-                else:
-                    try:
-                        p = np.asarray(pose, dtype=np.float64).reshape(-1)[:3]
-                    except (ValueError, TypeError):
-                        continue
-                pos = np.asarray(p, dtype=np.float64).reshape(-1)
+                pos = np.asarray(pose.p, dtype=np.float64).reshape(-1)
                 if len(pos) >= 2:
                     r = _xy_to_region(float(pos[0]), float(pos[1]))
                     if r not in blocked:
@@ -86,11 +79,11 @@ def run_dummy(model: str = "gemini-2.5-flash", temperature: float = 0.0, offline
     goal_xy = np.array([0.09, -0.09])   # → r_3_6
     ee_xy = np.array([-0.02, 0.0])
     # Full wall across all of row 4 (cols 0-9) — seals every path from row 5 to row 3,
-    # forcing the planner to clear blocks rather than route around them.
-    block_regions = [4 * GRID + c for c in range(GRID)]  # r_4_0 … r_4_9
+    # forcing the planner to clear obstacles rather than route around them.
+    obstacle_regions = [4 * GRID + c for c in range(GRID)]  # r_4_0 … r_4_9
 
     domain_path = os.path.join(os.path.dirname(__file__), "domain_pusht.pddl")
-    problem_str = state_to_problem(tee_xy, goal_xy, ee_xy, block_regions)
+    problem_str = state_to_problem(tee_xy, goal_xy, ee_xy, obstacle_regions)
     subgoals = get_subgoals(
         domain_path,
         problem_str,
@@ -106,12 +99,12 @@ def _compact_state_summary(problem_str: str) -> str:
     robot = re.search(r"\(robot-at robot1 (r_\d+_\d+)\)", problem_str)
     tee = re.search(r"\(object-at tee (r_\d+_\d+)\)", problem_str)
     goal = re.search(r"\(goal-at (r_\d+_\d+)\)", problem_str)
-    blocks = re.findall(r"\(block-at block\d+ (r_\d+_\d+)\)", problem_str)
+    obstacles = re.findall(r"\(obstacle-at obstacle\d+ (r_\d+_\d+)\)", problem_str)
     r = robot.group(1) if robot else "?"
     t = tee.group(1) if tee else "?"
     g = goal.group(1) if goal else "?"
-    b = ", ".join(sorted(set(blocks))) if blocks else "none"
-    return f"robot={r}  tee={t}  goal={g}  blocks=[{b}]"
+    b = ", ".join(sorted(set(obstacles))) if obstacles else "none"
+    return f"robot={r}  tee={t}  goal={g}  obstacles=[{b}]"
 
 
 def main(argv=None):

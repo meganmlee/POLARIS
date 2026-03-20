@@ -125,8 +125,8 @@ class PushTWithObstaclesEnv(PushTEnv):
                 cube.set_pose(pose)
 
 
-@register_env("MoveGoal-WithObstacles-v1", max_episode_steps=200)
-class MoveGoalWithObstaclesEnv(PushTWithObstaclesEnv):
+@register_env("Reach-WithObstacles-v1", max_episode_steps=200)
+class ReachWithObstaclesEnv(PushTWithObstaclesEnv):
     """Move EE to a random goal above the table. Same scene as PushT-WithObstacles.
 
     Observation extras: goal_pos (3,), ee_pos (3,), ee_to_goal (3,)

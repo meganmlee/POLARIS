@@ -2,16 +2,16 @@
 Closed-loop executor: generate subgoals → execute skill → re-plan → repeat.
 
 Usage:
-    python high_level_planner/executor.py --seed 42 --checkpoint MoveGoal-WithObstacles-v1__1__<timestamp>
+    python high_level_planner/executor.py --seed 42 --reach-checkpoint Reach-WithObstacles-v1__1__<timestamp>
     python high_level_planner/executor.py --seed 42 --skill rrt
     python high_level_planner/executor.py --seed 3 --max_replans 5 --offline --skill rrt
     python high_level_planner/executor.py --seed 0 \\
-        --checkpoint MoveGoal-WithObstacles-v1__1__<ts> \\
+        --reach-checkpoint Reach-WithObstacles-v1__1__<ts> \\
         --push-cube-checkpoint PushCube-WithObstacles-v1__1__<ts>
 
 Checkpoint args accept either a full path or just a run name from the checkpoints/ folder.
-e.g. --checkpoint MoveGoal-WithObstacles-v1__1__1773025568
-  expands to checkpoints/MoveGoal-WithObstacles-v1__1__1773025568/final_ckpt.pt
+e.g. --reach-checkpoint Reach-WithObstacles-v1__1__1773025568
+  expands to checkpoints/Reach-WithObstacles-v1__1__1773025568/final_ckpt.pt
 """
 import argparse
 import os
@@ -65,8 +65,8 @@ def _parse_region(state_str: str) -> str | None:
 
 
 def _parse_block(state_str: str) -> int | None:
-    """Extract block index from a PDDL atom, e.g. '(holding robot1 block3)' → 3."""
-    m = re.search(r"block(\d+)", state_str)
+    """Extract obstacle index from a PDDL atom, e.g. '(holding robot1 obstacle3)' → 3."""
+    m = re.search(r"obstacle(\d+)", state_str)
     return int(m.group(1)) if m else None
 
 
@@ -140,10 +140,10 @@ def run(
                     skill_failed = True
                     break
                 if block_idx is None:
-                    print(f"    [WARN] could not parse block index from: {state!r}")
+                    print(f"    [WARN] could not parse obstacle index from: {state!r}")
                     skill_failed = True
                     break
-                print(f"    → pick block{block_idx}")
+                print(f"    → pick cube{block_idx}")
                 success, obs = pick_execute(
                     env, obs, block_idx, checkpoint=pick_checkpoint, render=render
                 )
@@ -163,7 +163,7 @@ def run(
                     break
                 x, y = region_to_xy(region)
                 goal_xyz = np.array([x, y, 0.02], dtype=np.float32)  # table-surface height
-                print(f"    → place block{block_idx} at {np.round(goal_xyz, 3)}")
+                print(f"    → place cube{block_idx} at {np.round(goal_xyz, 3)}")
                 success, obs = place_execute(
                     env, obs, block_idx, goal_xyz, checkpoint=place_checkpoint, render=render
                 )
@@ -183,7 +183,7 @@ def run(
                     break
                 x, y = region_to_xy(region)
                 goal_xyz = np.array([x, y, 0.0], dtype=np.float32)
-                print(f"    → push_cube block{block_idx} to {np.round(goal_xyz, 3)}")
+                print(f"    → push_cube obstacle{block_idx} to {np.round(goal_xyz, 3)}")
                 success, obs = push_cube_execute(
                     env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=render
                 )
@@ -217,7 +217,7 @@ if __name__ == "__main__":
     ap.add_argument("--render",              action="store_true", help="Open a viewer window")
     ap.add_argument("--model",               default="gemini-2.5-flash")
     ap.add_argument("--skill",               default="ppo", choices=["rrt", "ppo"])
-    ap.add_argument("--checkpoint",          default=None, help="Reach PPO checkpoint (required for --skill ppo)")
+    ap.add_argument("--reach-checkpoint",    default=None, dest="reach_checkpoint", help="Reach PPO checkpoint (required for --skill ppo)")
     ap.add_argument("--pick-checkpoint",     default=None, dest="pick_checkpoint",
                     help="Pick skill PPO checkpoint")
     ap.add_argument("--place-checkpoint",    default=None, dest="place_checkpoint",
@@ -225,8 +225,8 @@ if __name__ == "__main__":
     ap.add_argument("--push-cube-checkpoint", default=None, dest="push_cube_checkpoint",
                     help="Push-cube skill PPO checkpoint")
     args = ap.parse_args()
-    if args.skill == "ppo" and args.checkpoint is None:
-        ap.error("--checkpoint is required when using --skill ppo")
+    if args.skill == "ppo" and args.reach_checkpoint is None:
+        ap.error("--reach-checkpoint is required when using --skill ppo")
     run(
         seed=args.seed,
         max_replans=args.max_replans,
@@ -234,7 +234,7 @@ if __name__ == "__main__":
         model=args.model,
         render=args.render,
         skill=args.skill,
-        checkpoint=_resolve_checkpoint(args.checkpoint),
+        checkpoint=_resolve_checkpoint(args.reach_checkpoint),
         pick_checkpoint=_resolve_checkpoint(args.pick_checkpoint),
         place_checkpoint=_resolve_checkpoint(args.place_checkpoint),
         push_cube_checkpoint=_resolve_checkpoint(args.push_cube_checkpoint),

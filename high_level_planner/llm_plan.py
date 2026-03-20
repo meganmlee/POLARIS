@@ -20,7 +20,7 @@ GRID = 10
 TABLE_BOUND = 0.30
 TILE_SIZE_M = (2.0 * TABLE_BOUND) / GRID
 
-NUM_BLOCKS = 10
+NUM_OBSTACLES = 10
 NUM_PICKABLE = 5
 
 VALID_SKILLS = frozenset({"reach", "push_tee", "pick", "place", "push_cube"})
@@ -82,27 +82,27 @@ def _region_layout_comment() -> str:
     )
 
 
-def state_to_problem(tee_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray, block_regions: list) -> str:
+def state_to_problem(tee_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray, obstacle_regions: list) -> str:
     rt = _xy_to_region(tee_xy[0], tee_xy[1])
     rg = _xy_to_region(goal_xy[0], goal_xy[1])
     re = _xy_to_region(ee_xy[0], ee_xy[1])
-    blocks = list(block_regions)[:NUM_BLOCKS]
-    n_blocks = len(blocks)
-    n_pickable = min(NUM_PICKABLE, n_blocks)
-    region_set = set(blocks)
+    obstacles = list(obstacle_regions)[:NUM_OBSTACLES]
+    n_obstacles = len(obstacles)
+    n_pickable = min(NUM_PICKABLE, n_obstacles)
+    region_set = set(obstacles)
     region_names = [_region_to_name(i) for i in range(GRID * GRID)]
-    objects = "robot1 - robot tee - tee " + " ".join(f"block{i}" for i in range(n_blocks)) + " - block " + " ".join(region_names) + " - region"
+    objects = "robot1 - robot tee - tee " + " ".join(f"obstacle{i}" for i in range(n_obstacles)) + " - obstacle " + " ".join(region_names) + " - region"
     init = [
         f"(robot-at robot1 {_region_to_name(re)})",
         f"(object-at tee {_region_to_name(rt)})",
         f"(goal-at {_region_to_name(rg)})",
     ]
     for i in range(n_pickable):
-        init.append(f"(pickable block{i})")
-    for i in range(n_pickable, n_blocks):
-        init.append(f"(push-only block{i})")
-    for i, r in enumerate(blocks):
-        init.append(f"(block-at block{i} {_region_to_name(r)})")
+        init.append(f"(pickable obstacle{i})")
+    for i in range(n_pickable, n_obstacles):
+        init.append(f"(push-only obstacle{i})")
+    for i, r in enumerate(obstacles):
+        init.append(f"(obstacle-at obstacle{i} {_region_to_name(r)})")
     for i in range(GRID * GRID):
         if i not in region_set:
             init.append(f"(clear {_region_to_name(i)})")
@@ -110,15 +110,15 @@ def state_to_problem(tee_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray,
         init.append(f"(adjacent {_region_to_name(a)} {_region_to_name(b)})")
     goal = f"(object-at tee {_region_to_name(rg)})"
     path_tee_to_goal_cells = set(_bfs_path(rt, rg, set()))
-    blocks_on_path = [i for i in range(n_blocks) if blocks[i] in path_tee_to_goal_cells]
-    block_list = ", ".join(f"block{i}@{_region_to_name(blocks[i])}" for i in range(n_blocks))
+    obstacles_on_path = [i for i in range(n_obstacles) if obstacles[i] in path_tee_to_goal_cells]
+    obstacle_list = ", ".join(f"obstacle{i}@{_region_to_name(obstacles[i])}" for i in range(n_obstacles))
     on_path_str = (
-        f" Blocks ON THE PATH (clear first): " + ", ".join(f"block{i} at {_region_to_name(blocks[i])}" for i in blocks_on_path) + "."
-    ) if blocks_on_path else " No blocks on direct tee→goal path; may still need clears."
-    pickable_range = f"block0..{n_pickable - 1}" if n_pickable > 0 else "none"
-    pushonly_range = f"block{n_pickable}..{n_blocks - 1}" if n_pickable < n_blocks else "none"
+        f" Obstacles ON THE PATH (clear first): " + ", ".join(f"obstacle{i} at {_region_to_name(obstacles[i])}" for i in obstacles_on_path) + "."
+    ) if obstacles_on_path else " No obstacles on direct tee→goal path; may still need clears."
+    pickable_range = f"obstacle0..{n_pickable - 1}" if n_pickable > 0 else "none"
+    pushonly_range = f"obstacle{n_pickable}..{n_obstacles - 1}" if n_pickable < n_obstacles else "none"
     scenario = (
-        f"; robot={_region_to_name(re)}, tee={_region_to_name(rt)}, goal={_region_to_name(rg)}. Blocks: {block_list}. "
+        f"; robot={_region_to_name(re)}, tee={_region_to_name(rt)}, goal={_region_to_name(rg)}. Obstacles: {obstacle_list}. "
         f"{pickable_range} pickable (pick+place); {pushonly_range} push-only (push_cube). "
         f"{on_path_str} "
         "Output: one line per subgoal, SKILL<TAB>STATE (one PDDL atom in parens)."
@@ -151,7 +151,7 @@ def _parse_problem_regions(problem_str: str):
     robot = re.search(r"\(robot-at robot1 (r_\d+_\d+)\)", problem_str)
     tee = re.search(r"\(object-at tee (r_\d+_\d+)\)", problem_str)
     goal = re.search(r"\(goal-at (r_\d+_\d+)\)", problem_str)
-    blocked = set(_name_to_idx(m.group(1)) for m in re.finditer(r"\(block-at block\d+ (r_\d+_\d+)\)", problem_str))
+    blocked = set(_name_to_idx(m.group(1)) for m in re.finditer(r"\(obstacle-at obstacle\d+ (r_\d+_\d+)\)", problem_str))
     return (
         _name_to_idx(tee.group(1)) if tee else 0,
         _name_to_idx(goal.group(1)) if goal else 0,
@@ -184,14 +184,14 @@ def _bfs_path(start: int, goal: int, blocked: set) -> list:
     return []
 
 
-def _parse_block_info(problem_str: str) -> tuple[dict, set, set]:
-    """Parse block positions, pickable set, and push-only set from a problem string."""
+def _parse_obstacle_info(problem_str: str) -> tuple[dict, set, set]:
+    """Parse obstacle positions, pickable set, and push-only set from a problem string."""
     positions = {
         m.group(1): _name_to_idx(m.group(2))
-        for m in re.finditer(r"\(block-at (block\d+) (r_\d+_\d+)\)", problem_str)
+        for m in re.finditer(r"\(obstacle-at (obstacle\d+) (r_\d+_\d+)\)", problem_str)
     }
-    pickable  = {m.group(1) for m in re.finditer(r"\(pickable (block\d+)\)", problem_str)}
-    push_only = {m.group(1) for m in re.finditer(r"\(push-only (block\d+)\)", problem_str)}
+    pickable  = {m.group(1) for m in re.finditer(r"\(pickable (obstacle\d+)\)", problem_str)}
+    push_only = {m.group(1) for m in re.finditer(r"\(push-only (obstacle\d+)\)", problem_str)}
     return positions, pickable, push_only
 
 
@@ -206,31 +206,31 @@ def _clear_path_subgoals(tee_r: int, goal_r: int, blocked: set, problem_str: str
         return []
 
     path_cells = set(direct_path)
-    positions, pickable, push_only = _parse_block_info(problem_str)
+    positions, pickable, push_only = _parse_obstacle_info(problem_str)
     adj = _adjacency()
 
     subgoals = []
-    for block_name, block_region in positions.items():
-        if block_region not in path_cells:
+    for obstacle_name, obstacle_region in positions.items():
+        if obstacle_region not in path_cells:
             continue
 
-        # Preferred drop zone: adjacent to block, not on path, not already blocked
+        # Preferred drop zone: adjacent to obstacle, not on path, not already blocked
         drop = next(
-            (n for n in adj[block_region] if n not in path_cells and n not in blocked),
-            next((n for n in adj[block_region] if n not in blocked), None),
+            (n for n in adj[obstacle_region] if n not in path_cells and n not in blocked),
+            next((n for n in adj[obstacle_region] if n not in blocked), None),
         )
 
         subgoals.append({
             "skill": "reach",
-            "state": f"(robot-at robot1 {_region_to_name(block_region)})",
+            "state": f"(robot-at robot1 {_region_to_name(obstacle_region)})",
         })
 
-        if block_name in pickable:
-            subgoals.append({"skill": "pick",  "state": f"(holding robot1 {block_name})"})
+        if obstacle_name in pickable:
+            subgoals.append({"skill": "pick",  "state": f"(holding robot1 {obstacle_name})"})
             if drop is not None:
-                subgoals.append({"skill": "place", "state": f"(block-at {block_name} {_region_to_name(drop)})"})
-        elif block_name in push_only and drop is not None:
-            subgoals.append({"skill": "push_cube", "state": f"(block-at {block_name} {_region_to_name(drop)})"})
+                subgoals.append({"skill": "place", "state": f"(obstacle-at {obstacle_name} {_region_to_name(drop)})"})
+        elif obstacle_name in push_only and drop is not None:
+            subgoals.append({"skill": "push_cube", "state": f"(obstacle-at {obstacle_name} {_region_to_name(drop)})"})
 
     return subgoals
 
@@ -313,17 +313,17 @@ def plan_to_subgoals(plan_str: str, _problem_str: str) -> list[dict]:
         if m:
             subgoals.append({"skill": "push_tee", "state": f"(object-at tee {m.group(1)})"})
             continue
-        m = re.match(r"\(pick robot1 (block\d+) r_\d+_\d+\)", line)
+        m = re.match(r"\(pick robot1 (obstacle\d+) r_\d+_\d+\)", line)
         if m:
             subgoals.append({"skill": "pick", "state": f"(holding robot1 {m.group(1)})"})
             continue
-        m = re.match(r"\(place robot1 (block\d+) (r_\d+_\d+)\)", line)
+        m = re.match(r"\(place robot1 (obstacle\d+) (r_\d+_\d+)\)", line)
         if m:
-            subgoals.append({"skill": "place", "state": f"(block-at {m.group(1)} {m.group(2)})"})
+            subgoals.append({"skill": "place", "state": f"(obstacle-at {m.group(1)} {m.group(2)})"})
             continue
-        m = re.match(r"\(push_cube robot1 (block\d+) r_\d+_\d+ (r_\d+_\d+)\)", line)
+        m = re.match(r"\(push_cube robot1 (obstacle\d+) r_\d+_\d+ (r_\d+_\d+)\)", line)
         if m:
-            subgoals.append({"skill": "push_cube", "state": f"(block-at {m.group(1)} {m.group(2)})"})
+            subgoals.append({"skill": "push_cube", "state": f"(obstacle-at {m.group(1)} {m.group(2)})"})
     return subgoals
 
 
@@ -379,8 +379,8 @@ Each line is one milestone: the SKILL that achieves it, then TAB, then the targe
 Rules:
 - Order matters: earlier lines must be achievable before later ones.
 - End with: push_tee	(object-at tee {goal_region})
-- Before that push chain: if blocks block the path, clear them (pick/place or push_cube), then reach to the tee's cell, then many push_tee steps (one grid cell per push_tee toward {goal_region}).
-- Skills: reach, push_tee, pick, place, push_cube. States: (robot-at robot1 r_i_j), (object-at tee r_i_j), (holding robot1 blockN), (block-at blockN r_i_j).
+- Before that push chain: if obstacles block the path, clear them (pick/place or push_cube), then reach to the tee's cell, then many push_tee steps (one grid cell per push_tee toward {goal_region}).
+- Skills: reach, push_tee, pick, place, push_cube. States: (robot-at robot1 r_i_j), (object-at tee r_i_j), (holding robot1 obstacleN), (obstacle-at obstacleN r_i_j).
 
 Domain:
 {domain}

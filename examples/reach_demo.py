@@ -1,5 +1,5 @@
 """
-Simple visualization demo for MoveGoal-WithObstacles-v1.
+Simple visualization demo for Reach-WithObstacles-v1.
 
 A proportional controller moves the EE toward the sampled goal position.
 Control mode: pd_ee_delta_pose (easier to write a simple goal-reaching policy).
@@ -21,7 +21,7 @@ try:
 except ImportError:
     import gym
 
-import envs  # noqa: F401 — registers MoveGoal-WithObstacles-v1
+import envs  # noqa: F401 — registers Reach-WithObstacles-v1
 
 
 MAX_STEPS = 200
@@ -49,7 +49,7 @@ def reach_policy(obs) -> np.ndarray:
 
 def main():
     env = gym.make(
-        "MoveGoal-WithObstacles-v1",
+        "Reach-WithObstacles-v1",
         obs_mode="state_dict",
         control_mode="pd_ee_delta_pose",
         render_mode="human",

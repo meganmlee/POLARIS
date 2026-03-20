@@ -39,7 +39,7 @@ class Args:
     seed: int = 1
     cuda: bool = True
 
-    env_id: str = "MoveGoal-WithObstacles-v1"
+    env_id: str = "Reach-WithObstacles-v1"
     obs_mode: str = "state"
     control_mode: str = "pd_ee_delta_pose"
     num_envs: int = 512
@@ -87,7 +87,7 @@ class Args:
 
 def _build_flat_obs(obs: dict, goal_xyz: np.ndarray) -> np.ndarray:
     """
-    Reconstruct the flat state obs that MoveGoal-WithObstacles produces during training.
+    Reconstruct the flat state obs that Reach-WithObstacles produces during training.
     obs_mode='state' flattens: qpos(9), qvel(9), goal_pos(3), ee_pos(3), ee_to_goal(3) = 27.
     """
     qpos   = np.asarray(obs["agent"]["qpos"], dtype=np.float32).reshape(-1)
@@ -108,7 +108,7 @@ def execute(
 ) -> tuple[bool, dict]:
     """
     Run the PPO reach policy on an already-running env to move EE to goal_xyz.
-    Requires a checkpoint trained on MoveGoal-WithObstacles-v1 with obs_mode='state'.
+    Requires a checkpoint trained on Reach-WithObstacles-v1 with obs_mode='state'.
     Returns (success, latest_obs).
     """
     agent = load_agent(checkpoint, device)

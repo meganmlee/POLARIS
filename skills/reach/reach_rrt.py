@@ -29,7 +29,7 @@ from scipy.interpolate import CubicSpline
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-import envs  # registers MoveGoal-WithObstacles-v1
+import envs  # registers Reach-WithObstacles-v1
 
 
 JOINT_LOWER = np.array([-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973])
@@ -288,7 +288,7 @@ def run_eval(args):
     np.random.seed(args.seed)
 
     env = gym.make(
-        "MoveGoal-WithObstacles-v1",
+        "Reach-WithObstacles-v1",
         num_envs=1,
         obs_mode="state_dict",
         control_mode="pd_joint_pos",
@@ -362,7 +362,7 @@ def run_eval(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="RRT-Connect eval for MoveGoal-WithObstacles-v1")
+    parser = argparse.ArgumentParser(description="RRT-Connect eval for Reach-WithObstacles-v1")
     parser.add_argument("--num_episodes",    type=int,   default=10)
     parser.add_argument("--seed",            type=int,   default=0)
     parser.add_argument("--max_iter",        type=int,   default=2000)

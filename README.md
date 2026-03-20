@@ -18,7 +18,7 @@ Each skill has multiple backends sharing the same environment, so methods are di
 
 | Skill | Classical | Learned (PPO) | Environment |
 |---|---|---|---|
-| Reach | RRT* (`reach_rrt.py`) | PPO (`reach_ppo.py`) | `MoveGoal-WithObstacles-v1` |
+| Reach | RRT* (`reach_rrt.py`) | PPO (`reach_ppo.py`) | `Reach-WithObstacles-v1` |
 | Push Cube | RRT (`push_cube_rrt.py`) | PPO (`push_cube_ppo.py`) | `PushCube-WithObstacles-v1` |
 | Pick | — | — | — |
 | Place | — | — | — |
@@ -29,7 +29,7 @@ Each skill has multiple backends sharing the same environment, so methods are di
 ```
 POLARIS/
 ├── envs/                          # Custom ManiSkill environments (shared across methods)
-│   ├── pusht_obstacles.py         # PushT, PushCube, MoveGoal with obstacle variants
+│   ├── pusht_obstacles.py         # PushT, PushCube, Reach with obstacle variants
 │   ├── shelf_retrieve_v1.py       # Object retrieval from shelf
 │   └── shelf_scene_builder.py
 ├── skills/                        # Skill backends
@@ -123,7 +123,7 @@ All environments are in [envs/](envs/) and registered on `import envs`. RL and p
 
 | Environment ID | Base Task | Notes |
 |---|---|---|
-| `MoveGoal-WithObstacles-v1` | MoveToPoint | 4 randomized obstacle cubes |
+| `Reach-WithObstacles-v1` | MoveToPoint | 4 randomized obstacle cubes |
 | `PushCube-WithObstacles-v1` | PushCube | 4 randomized obstacle cubes |
 | `PushT-WithObstacles-v1` | PushT | 4 randomized obstacle cubes |
 | `ObjectRetrieveFromShelf-v1` | Custom | Cluttered shelf, randomized target |
@@ -240,7 +240,7 @@ Ties the planner and skill library into a full execution loop: plan → dispatch
 
 ```bash
 # PPO reach skill (checkpoint required)
-python high_level_planner/executor.py --seed 42 --checkpoint MoveGoal-WithObstacles-v1__1__<timestamp>
+python high_level_planner/executor.py --seed 42 --reach-checkpoint Reach-WithObstacles-v1__1__<timestamp>
 
 # RRT reach skill (no checkpoint needed)
 python high_level_planner/executor.py --seed 42 --skill rrt
@@ -250,11 +250,11 @@ python high_level_planner/executor.py --seed 3 --max_replans 5 --offline --skill
 
 # Full multi-skill run
 python high_level_planner/executor.py --seed 0 \
-    --checkpoint MoveGoal-WithObstacles-v1__1__<ts> \
+    --reach-checkpoint Reach-WithObstacles-v1__1__<ts> \
     --push-cube-checkpoint PushCube-WithObstacles-v1__1__<ts>
 ```
 
-Checkpoint args accept either a full path or a run name under `checkpoints/` (e.g. `MoveGoal-WithObstacles-v1__1__1773025568` expands to `checkpoints/.../final_ckpt.pt`).
+Checkpoint args accept either a full path or a run name under `checkpoints/` (e.g. `Reach-WithObstacles-v1__1__1773025568` expands to `checkpoints/.../final_ckpt.pt`).
 
 ### `domain_pusht.pddl` — PDDL Domain
 
