@@ -17,6 +17,7 @@ import argparse
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 _CHECKPOINTS_DIR = Path(__file__).resolve().parents[1] / "checkpoints"
@@ -77,6 +78,7 @@ def run(
     model: str = "gemini-2.5-flash",
     render: bool = False,
     skill: str = "ppo",
+    env_id: str = "PushT-WallObstacles-v1",
     checkpoint: str | None = None,
     pick_checkpoint: str | None = None,
     place_checkpoint: str | None = None,
@@ -84,13 +86,17 @@ def run(
 ):
     control_mode = "pd_ee_delta_pose" if skill == "ppo" else "pd_joint_pos"
     env = gym.make(
-        "PushT-WithObstacles-v1",
+        env_id,
         num_envs=1,
         obs_mode="state_dict",
         control_mode=control_mode,
         sim_backend="physx_cpu",
         render_mode="human" if render else None,
     )
+    if render:
+        _orig_render = env.render
+        env.render = lambda *a, **kw: (_orig_render(*a, **kw), time.sleep(0.05))[0]
+
     wrapper = ManiSkillPlanningWrapper(env, adapter=PushTTaskAdapter())
     obs, _ = wrapper.reset(seed=seed)
 
@@ -121,7 +127,7 @@ def run(
                     np.asarray(obs["extra"]["tcp_pose"], dtype=np.float32).reshape(-1)[2]
                 )
                 x, y = region_to_xy(region)
-                goal_xyz = np.array([x, y, ee_z], dtype=np.float32)
+                goal_xyz = np.array([x, y, max(ee_z, 0.10)], dtype=np.float32)
                 print(f"    → reach {np.round(goal_xyz, 3)}")
 
                 if skill == "ppo":

@@ -130,9 +130,9 @@ def execute(
     raw      = env.unwrapped
     obstacle = raw.obstacles[block_idx]
 
-    PLACE_THRESH  = 0.025
-    RETREAT_DIST  = 0.10
-    REST_Z_THRESH = 0.03
+    PLACE_THRESH  = 0.05
+    RETREAT_DIST  = 0.05
+    REST_Z_THRESH = 0.05
 
     agent = load_agent(checkpoint, device)
     action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
@@ -146,6 +146,10 @@ def execute(
         is_placed    = (not is_grasped) and (obj_to_goal < PLACE_THRESH) and (obj_pos[2] < REST_Z_THRESH)
         is_retreated = float(np.linalg.norm(tcp_pos - obj_pos)) > RETREAT_DIST
         return bool(is_placed and is_retreated)
+
+    # Bail out immediately if the robot isn't holding the cube — nothing to place.
+    if not bool(raw.agent.is_grasping(obstacle).cpu().numpy().any()):
+        return False, obs
 
     current_obs = obs
     for _ in range(max_steps):
