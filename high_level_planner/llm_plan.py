@@ -214,11 +214,27 @@ def _clear_path_subgoals(tee_r: int, goal_r: int, blocked: set, problem_str: str
         if obstacle_region not in path_cells:
             continue
 
-        # Preferred drop zone: adjacent to obstacle, not on path, not already blocked
-        drop = next(
-            (n for n in adj[obstacle_region] if n not in path_cells and n not in blocked),
-            next((n for n in adj[obstacle_region] if n not in blocked), None),
-        )
+        # BFS outward from the obstacle to find the nearest cell that is
+        # off-path, unblocked, and at least 2 steps away (so the dropped
+        # cube won't immediately re-block the path or sit in the wall).
+        drop = None
+        seen_drop = {obstacle_region}
+        frontier = [(obstacle_region, 0)]
+        while frontier:
+            cell, depth = frontier.pop(0)
+            for n in adj[cell]:
+                if n in seen_drop:
+                    continue
+                seen_drop.add(n)
+                if n not in blocked and n not in path_cells and depth + 1 >= 2:
+                    drop = n
+                    break
+                frontier.append((n, depth + 1))
+            if drop is not None:
+                break
+        # Fallback: any unblocked adjacent cell if BFS found nothing
+        if drop is None:
+            drop = next((n for n in adj[obstacle_region] if n not in blocked), None)
 
         subgoals.append({
             "skill": "reach",

@@ -233,6 +233,53 @@ class PushCubeWithObstaclesEnv(PushTWithObstaclesEnv):
         return self.compute_dense_reward(obs, action, info) / 7.0
 
 
+@register_env("PushT-WallObstacles-v1", max_episode_steps=200)
+class PushTWallObstaclesEnv(PushTWithObstaclesEnv):
+    """PushT where all 10 obstacle cubes are fixed in a wall across the table.
+
+    All cubes are placed along WALL_ROW (grid row index), one per grid column.
+    This guarantees every BFS path from tee to goal that crosses the wall is
+    blocked, forcing the high-level planner to emit pick/place or push_cube
+    subgoals rather than just routing around obstacles.
+
+    Tee and goal positions are inherited (random from PushTEnv). Seeds where
+    both land on the same side of the wall still work — the planner simply
+    won't need to clear the wall for those episodes.
+    """
+
+    # Grid row for the wall. Row 4 → y ≈ -0.03 m (just below table centre).
+    WALL_ROW: int = 4
+
+    # Always use all 10 obstacles so every grid column is filled.
+    MIN_OBSTACLES: int = 10
+    MAX_OBSTACLES: int = 10
+
+    # Planner constants (must match llm_plan.py)
+    _TABLE_BOUND: float = 0.30
+    _GRID: int = 10
+
+    def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
+        # Let PushTWithObstaclesEnv set up tee, goal, robot positions first,
+        # then immediately reposition every obstacle into the wall.
+        super()._initialize_episode(env_idx, options)
+        with torch.device(self.device):
+            b = len(env_idx)
+            q_id = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0)
+
+            y_center = (self.WALL_ROW + 0.5) / self._GRID * 2 * self._TABLE_BOUND - self._TABLE_BOUND
+
+            for col, cube in enumerate(self.obstacles):
+                half = self.OBSTACLE_SPECS[col][0]
+                x_center = (col + 0.5) / self._GRID * 2 * self._TABLE_BOUND - self._TABLE_BOUND
+                # Clamp to physical table extent so cubes stay on the surface.
+                x_center = float(np.clip(x_center, -self.TABLE_HALF, self.TABLE_HALF))
+                xyz = torch.tensor(
+                    [[x_center, y_center, half]], device=self.device
+                ).expand(b, 3)
+                pose = Pose.create_from_pq(p=xyz, q=q_id.expand(b, 4))
+                cube.set_pose(pose)
+
+
 @register_env("PickSkillEnv", max_episode_steps=100)
 class PickSkillEnv(PushTWithObstaclesEnv):
     """Pick a randomly selected obstacle cube off the table.
@@ -289,15 +336,24 @@ class PickSkillEnv(PushTWithObstaclesEnv):
     def compute_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
         ee_pos        = self.agent.tcp.pose.p
         pick_cube_pos = self._get_pick_cube_pos()
-        reach_reward  = 1.0 - torch.tanh(5.0 * torch.linalg.norm(pick_cube_pos - ee_pos, dim=1))
+        dist          = torch.linalg.norm(pick_cube_pos - ee_pos, dim=1)
+        reach_reward  = 1.0 - torch.tanh(5.0 * dist)
         is_grasped    = info["is_grasped"].float()
         lift_reward   = 1.0 - torch.tanh(10.0 * (self.lift_threshold - pick_cube_pos[:, 2]).clamp(min=0.0))
-        reward        = reach_reward + is_grasped + lift_reward * is_grasped
+
+        # Reward opening the gripper while the EE is near the cube, so the
+        # policy learns to arrive with an open hand rather than ramming in closed.
+        finger_pos  = self.agent.robot.get_qpos()[:, -2:]   # (N, 2) — last two joints are fingers
+        gripper_openness = finger_pos.sum(dim=1) / (2 * 0.04)  # 0=closed, 1=fully open
+        near_cube   = (dist < 0.06).float()
+        pregrasp_reward = near_cube * gripper_openness
+
+        reward = reach_reward + pregrasp_reward + is_grasped + lift_reward * is_grasped
         reward[info["success"]] = 5.0
         return reward
 
     def compute_normalized_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
-        return self.compute_dense_reward(obs=obs, action=action, info=info) / 5.0
+        return self.compute_dense_reward(obs=obs, action=action, info=info) / 6.0
 
     @property
     def _default_human_render_camera_configs(self):
