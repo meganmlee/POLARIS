@@ -13,6 +13,7 @@ def make_eval_envs(
     other_kwargs: dict,
     video_dir: Optional[str] = None,
     wrappers: list[gym.Wrapper] = [],
+    video_trigger=None,
 ):
     """Create vectorized environment for evaluation and/or recording videos.
     For CPU vectorized environments only the first parallel environment is used to record videos.
@@ -90,6 +91,7 @@ def make_eval_envs(
                 source_type="diffusion_policy",
                 source_desc="diffusion_policy evaluation rollout",
                 max_steps_per_video=max_episode_steps,
+                save_video_trigger=video_trigger,
             )
         env = ManiSkillVectorEnv(env, ignore_terminations=True, record_metrics=True)
     return env

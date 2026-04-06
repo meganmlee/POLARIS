@@ -7,6 +7,7 @@ import os
 import sys
 import random
 import time
+from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
@@ -39,16 +40,10 @@ class Args:
     """the name of this experiment"""
     seed: int = 1
     """seed of the experiment"""
-    torch_deterministic: bool = True
+    torch_deterministic: bool = False
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
-    track: bool = False
-    """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "ManiSkill-PushT"
-    """the wandb's project name"""
-    wandb_entity: Optional[str] = None
-    """the entity (team) of wandb's project"""
     capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
@@ -58,9 +53,9 @@ class Args:
     """the path of demo dataset, expected to be a ManiSkill dataset h5py format file"""
     num_demos: Optional[int] = None
     """number of trajectories to load from the demo dataset"""
-    total_iters: int = 200_000 # 1_000_000
+    total_iters: int = 1_000_000
     """total timesteps of the experiment"""
-    batch_size: int = 1024
+    batch_size: int = 1500
     """the batch size of sample from the replay memory"""
 
     # Diffusion Policy specific arguments
@@ -78,11 +73,13 @@ class Args:
     """Override the environments' max_episode_steps. Should match or exceed the demo horizon."""
     log_freq: int = 1000
     """the frequency of logging the training metrics"""
-    eval_freq: int = 5000
+    eval_freq: int = 20000
     """the frequency of evaluating the agent"""
     save_freq: Optional[int] = None
     """the frequency of saving model checkpoints. By default only saves on best eval metrics."""
-    num_eval_episodes: int = 20
+    save_eval_video_freq: Optional[int] = 1
+    """save eval videos every this many eval runs; if None, saves every eval run (when capture_video=True)"""
+    num_eval_episodes: int = 10
     """the number of episodes to evaluate the agent on"""
     num_eval_envs: int = 10
     """the number of parallel environments for evaluation"""
@@ -133,28 +130,32 @@ class SmallDemoDataset_DiffusionPolicy(Dataset):
             ]
 
         print(f"Total transitions: {total_transitions}, Total obs sequences: {len(self.slices)}")
-        self.trajectories = trajectories
+
+        # Pre-compute all slices so __getitem__ is a single index lookup.
+        obs_seqs = []
+        act_seqs = []
+        for traj_idx, start, end in self.slices:
+            L = trajectories['actions'][traj_idx].shape[0]
+            obs_seq = trajectories['observations'][traj_idx][max(0, start):start + obs_horizon]
+            act_seq = trajectories['actions'][traj_idx][max(0, start):end]
+            if start < 0:
+                obs_seq = torch.cat([obs_seq[0].repeat(-start, 1), obs_seq], dim=0)
+                act_seq = torch.cat([act_seq[0].repeat(-start, 1), act_seq], dim=0)
+            if end > L:
+                gripper_action = act_seq[-1, -1]
+                pad_action = torch.cat((self.pad_action_arm, gripper_action[None]), dim=0)
+                act_seq = torch.cat([act_seq, pad_action.repeat(end - L, 1)], dim=0)
+            obs_seqs.append(obs_seq)
+            act_seqs.append(act_seq)
+
+        self.obs_seqs = torch.stack(obs_seqs)  # (N, obs_horizon, obs_dim)
+        self.act_seqs = torch.stack(act_seqs)  # (N, pred_horizon, act_dim)
 
     def __getitem__(self, index):
-        traj_idx, start, end = self.slices[index]
-        L = self.trajectories['actions'][traj_idx].shape[0]
-
-        obs_seq = self.trajectories['observations'][traj_idx][max(0, start):start + self.obs_horizon]
-        act_seq = self.trajectories['actions'][traj_idx][max(0, start):end]
-
-        if start < 0:  # pad before trajectory start
-            obs_seq = torch.cat([obs_seq[0].repeat(-start, 1), obs_seq], dim=0)
-            act_seq = torch.cat([act_seq[0].repeat(-start, 1), act_seq], dim=0)
-        if end > L:  # pad after trajectory end
-            gripper_action = act_seq[-1, -1]
-            pad_action = torch.cat((self.pad_action_arm, gripper_action[None]), dim=0)
-            act_seq = torch.cat([act_seq, pad_action.repeat(end - L, 1)], dim=0)
-
-        assert obs_seq.shape[0] == self.obs_horizon and act_seq.shape[0] == self.pred_horizon
-        return {'observations': obs_seq, 'actions': act_seq}
+        return {'observations': self.obs_seqs[index], 'actions': self.act_seqs[index]}
 
     def __len__(self):
-        return len(self.slices)
+        return len(self.obs_seqs)
 
 
 class Agent(nn.Module):
@@ -219,13 +220,13 @@ class Agent(nn.Module):
         return noisy_action_seq[:, start:end]  # (B, act_horizon, act_dim)
 
 
-def save_ckpt(run_name, tag):
-    os.makedirs(f'runs/{run_name}/checkpoints', exist_ok=True)
+def save_ckpt(run_dir, tag):
+    os.makedirs(run_dir, exist_ok=True)
     ema.copy_to(ema_agent.parameters())
     torch.save({
         'agent': agent.state_dict(),
         'ema_agent': ema_agent.state_dict(),
-    }, f'runs/{run_name}/checkpoints/{tag}.pt')
+    }, f'{run_dir}/{tag}.pt')
 
 
 if __name__ == "__main__":
@@ -235,6 +236,7 @@ if __name__ == "__main__":
         run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     else:
         run_name = args.exp_name
+    run_dir = str(Path(__file__).resolve().parent.parent.parent / "checkpoints" / run_name)
 
     if args.demo_path.endswith('.h5'):
         import json
@@ -259,6 +261,7 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
+    torch.backends.cudnn.benchmark = not args.torch_deterministic
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
@@ -274,34 +277,25 @@ if __name__ == "__main__":
     )
     env_kwargs["max_episode_steps"] = args.max_episode_steps
     other_kwargs = dict(obs_horizon=args.obs_horizon)
+
+    _eval_run = [0]
+    _save_eval_video_freq = args.save_eval_video_freq
+    def eval_video_trigger(_):
+        if _save_eval_video_freq is None:
+            return True
+        return _eval_run[0] % _save_eval_video_freq == 0
+
     envs = make_eval_envs(
         args.env_id,
         args.num_eval_envs,
         args.sim_backend,
         env_kwargs,
         other_kwargs,
-        video_dir=f'runs/{run_name}/videos' if args.capture_video else None,
+        video_dir=f'{run_dir}/eval_videos' if args.capture_video else None,
+        video_trigger=eval_video_trigger if args.capture_video else None,
     )
 
-    if args.track:
-        import wandb
-        config = vars(args)
-        config["eval_env_cfg"] = dict(
-            **env_kwargs, num_envs=args.num_eval_envs,
-            env_id=args.env_id, env_horizon=args.max_episode_steps
-        )
-        wandb.init(
-            project=args.wandb_project_name,
-            entity=args.wandb_entity,
-            sync_tensorboard=True,
-            config=config,
-            name=run_name,
-            save_code=True,
-            group="DiffusionPolicy",
-            tags=["diffusion_policy", "push_tee"],
-        )
-
-    writer = SummaryWriter(f"runs/{run_name}")
+    writer = SummaryWriter(run_dir)
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
@@ -332,12 +326,14 @@ if __name__ == "__main__":
     )
     ema = EMAModel(parameters=agent.parameters(), power=0.75)
     ema_agent = Agent(envs, args).to(device)
+    scaler = torch.cuda.amp.GradScaler(enabled=args.cuda)
 
     best_eval_metrics = defaultdict(float)
     timings = defaultdict(float)
 
     def evaluate_and_save_best(iteration):
         if iteration % args.eval_freq == 0:
+            _eval_run[0] += 1
             last_tick = time.time()
             ema.copy_to(ema_agent.parameters())
             eval_metrics = evaluate(
@@ -355,7 +351,7 @@ if __name__ == "__main__":
             for k in save_on_best_metrics:
                 if k in eval_metrics and eval_metrics[k] > best_eval_metrics[k]:
                     best_eval_metrics[k] = eval_metrics[k]
-                    save_ckpt(run_name, f"best_eval_{k}")
+                    save_ckpt(run_dir, f"best_eval_{k}")
                     print(f"New best {k}_rate: {eval_metrics[k]:.4f}. Saving checkpoint.")
 
     def log_metrics(iteration):
@@ -372,16 +368,18 @@ if __name__ == "__main__":
         timings["data_loading"] += time.time() - last_tick
 
         last_tick = time.time()
-        total_loss = agent.compute_loss(
-            obs_seq=data_batch["observations"],
-            action_seq=data_batch["actions"],
-        )
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=args.cuda):
+            total_loss = agent.compute_loss(
+                obs_seq=data_batch["observations"],
+                action_seq=data_batch["actions"],
+            )
         timings["forward"] += time.time() - last_tick
 
         last_tick = time.time()
         optimizer.zero_grad()
-        total_loss.backward()
-        optimizer.step()
+        scaler.scale(total_loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
         lr_scheduler.step()
         timings["backward"] += time.time() - last_tick
 
@@ -393,7 +391,7 @@ if __name__ == "__main__":
         log_metrics(iteration)
 
         if args.save_freq is not None and iteration % args.save_freq == 0:
-            save_ckpt(run_name, str(iteration))
+            save_ckpt(run_dir, f"ckpt_{iteration}")
         pbar.update(1)
         pbar.set_postfix({"loss": total_loss.item()})
         last_tick = time.time()
