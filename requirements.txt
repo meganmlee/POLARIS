@@ -56,3 +56,6 @@ pyperplan>=2.1.0
 
 # Subgoal generation
 google-cloud-aiplatform
+
+# Diffusion Policy (Push T Diffusion)
+diffusers

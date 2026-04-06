@@ -47,6 +47,7 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r /opt/POLARIS/requirements.txt \
     && pip install --no-cache-dir git+https://github.com/haosulab/ManiSkill.git \
     && pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
+    && pip install --no-cache-dir diffusers \
     && pip install --no-cache-dir -e /opt/POLARIS
 
 # Vulkan: NVIDIA uses libGLX_nvidia.so.0 as Vulkan ICD. Host libs mounted at /host-lib and /host-lib-usr by run.sh.
