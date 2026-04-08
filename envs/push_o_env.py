@@ -38,7 +38,7 @@ class PushOEnv(BaseEnv):
     agent: Panda
 
     disk_radius: float = 0.05
-    disk_half_thickness: float = 0.008
+    disk_half_thickness: float = 0.02
     disk_static_friction: float = 0.3
     disk_dynamic_friction: float = 0.3
 
@@ -53,7 +53,7 @@ class PushOEnv(BaseEnv):
         robot_uids: str = "panda",
         robot_init_qpos_noise: float = 0.02,
         disk_radius: float = 0.05,
-        disk_half_thickness: float = 0.008,
+        disk_half_thickness: float = 0.02,
         **kwargs,
     ):
         self.robot_init_qpos_noise = robot_init_qpos_noise
@@ -161,8 +161,6 @@ class PushOEnv(BaseEnv):
         disk_pos = self.disk.pose.p
         return {
             "ee_pos":       ee_pos,
-            "disk_pos":     disk_pos,
-            "goal_pos":     self.goal_pos,
             "ee_to_disk":   disk_pos - ee_pos,
             "disk_to_goal": self.goal_pos - disk_pos,
             "overlap_frac": info["overlap_frac"].unsqueeze(-1),
@@ -172,7 +170,7 @@ class PushOEnv(BaseEnv):
         ee_pos   = self.agent.tcp.pose.p
         disk_pos = self.disk.pose.p
 
-        reach_reward   = 1.0 - torch.tanh(5.0 * torch.norm(ee_pos - disk_pos, dim=1))
+        reach_reward   = 0.5 * (1.0 - torch.tanh(5.0 * torch.norm(ee_pos - disk_pos, dim=1)))
         push_reward    = 1.0 - torch.tanh(5.0 * info["dist_to_goal"])
         overlap_reward = info["overlap_frac"]
 
@@ -180,7 +178,7 @@ class PushOEnv(BaseEnv):
         # Panda finger joints each range [0, 0.04] m; sum=0 → fully closed.
         finger_qpos        = self.agent.robot.get_qpos()[:, -2:]
         gripper_closedness = 1.0 - finger_qpos.sum(dim=1) / (2 * 0.04)
-        finger_reward      = 0.5 * gripper_closedness
+        finger_reward      = 0#.3 * gripper_closedness
 
         reward = reach_reward + push_reward + overlap_reward + finger_reward
         reward[info["success"]] = 5.0

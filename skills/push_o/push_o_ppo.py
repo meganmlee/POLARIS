@@ -4,12 +4,10 @@ Skill: Push a circular disk to a matching goal region on the table.
 The policy learns to close its fingers and use the end-effector as a pusher,
 nudging the disk until it overlaps ≥90% with the same-radius goal circle.
 
-Observation layout (state mode, 34-dim flat vector):
+Observation layout (state mode, 25-dim flat vector):
     qpos        (9,)   robot joint positions
     qvel        (9,)   robot joint velocities
     ee_pos      (3,)   EE world position
-    disk_pos    (3,)   disk centre world position
-    goal_pos    (3,)   goal centre world position
     ee_to_disk  (3,)   disk_pos − ee_pos
     disk_to_goal(3,)   goal_pos − disk_pos
     overlap_frac(1,)   geometric overlap fraction [0, 1]
@@ -45,6 +43,16 @@ sys.path.insert(0, os.path.join(_SKILL_DIR, ".."))        # skills/ for ppo_base
 from ppo_base import load_agent, train  # noqa: E402
 
 
+def _circle_overlap_frac_np(disk_xy: np.ndarray, goal_xy: np.ndarray, r: float) -> float:
+    """Numpy scalar version of PushOEnv._circle_overlap_frac."""
+    d = float(np.linalg.norm(disk_xy - goal_xy))
+    if d >= 2.0 * r:
+        return 0.0
+    cos_arg = np.clip(d / (2.0 * r), -1.0 + 1e-7, 1.0 - 1e-7)
+    A = 2.0 * r * r * np.arccos(cos_arg) - 0.5 * d * np.sqrt(max(4.0 * r * r - d * d, 0.0))
+    return float(np.clip(A / (np.pi * r * r), 0.0, 1.0))
+
+
 @dataclass
 class Args:
     exp_name: Optional[str] = None
@@ -63,7 +71,7 @@ class Args:
     partial_reset: bool = True
     eval_partial_reset: bool = False
 
-    total_timesteps: int = 500_000
+    total_timesteps: int = 6_000_000
     learning_rate: float = 3e-4
     anneal_lr: bool = False
     gamma: float = 0.8
@@ -80,7 +88,7 @@ class Args:
     reward_scale: float = 1.0
     finite_horizon_gae: bool = False
 
-    eval_freq: int = 5
+    eval_freq: int = 8
     save_model: bool = True
     capture_video: bool = True
     save_eval_video_freq: Optional[int] = 1
@@ -99,40 +107,26 @@ class Args:
 
 def _build_flat_obs(obs: dict, raw_env, goal_xyz: np.ndarray) -> np.ndarray:
     """
-    Reconstruct the 34-dim flat state vector that PushO-v1 produces during training.
+    Reconstruct the 25-dim flat state vector that PushO-v1 produces during training.
 
-    Layout: qpos(9) + qvel(9) + ee_pos(3) + disk_pos(3) + goal_pos(3)
-            + ee_to_disk(3) + disk_to_goal(3) + overlap_frac(1) = 34
+    Layout: qpos(9) + qvel(9) + ee_pos(3) + ee_to_disk(3) + disk_to_goal(3) + overlap_frac(1) = 25
     """
-    qpos     = np.asarray(obs["agent"]["qpos"],  dtype=np.float32).reshape(-1)
-    qvel     = np.asarray(obs["agent"]["qvel"],  dtype=np.float32).reshape(-1)
+    qpos     = np.asarray(obs["agent"]["qpos"], dtype=np.float32).reshape(-1)
+    qvel     = np.asarray(obs["agent"]["qvel"], dtype=np.float32).reshape(-1)
     ee_pos   = raw_env.agent.tcp.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
     disk_pos = raw_env.disk.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
     goal     = goal_xyz.astype(np.float32).reshape(3)
 
-    # Compute overlap fraction from current disk and goal positions
-    disk_xy = disk_pos[:2]
-    goal_xy = goal[:2]
-    r = float(raw_env.disk_radius)
-    d = float(np.linalg.norm(disk_xy - goal_xy))
-    if d >= 2.0 * r:
-        overlap = 0.0
-    else:
-        cos_arg = np.clip(d / (2.0 * r), -1.0 + 1e-7, 1.0 - 1e-7)
-        A = 2.0 * r * r * np.arccos(cos_arg) - 0.5 * d * np.sqrt(
-            max(4.0 * r * r - d * d, 0.0)
-        )
-        overlap = float(np.clip(A / (np.pi * r * r), 0.0, 1.0))
+    r       = float(raw_env.disk_radius)
+    overlap = _circle_overlap_frac_np(disk_pos[:2], goal[:2], r)
 
     return np.concatenate([
         qpos,
         qvel,
         ee_pos,
-        disk_pos,
-        goal,
         disk_pos - ee_pos,   # ee_to_disk
-        goal    - disk_pos,  # disk_to_goal
-        np.array([overlap],  dtype=np.float32),
+        goal     - disk_pos, # disk_to_goal
+        np.array([overlap], dtype=np.float32),
     ])
 
 
@@ -180,39 +174,15 @@ def execute(
         if render:
             env.render()
 
-        # Check success via overlap fraction
         disk_pos = raw.disk.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
-        disk_xy  = disk_pos[:2]
-        goal_xy  = goal_xyz[:2]
-        r = float(raw.disk_radius)
-        d = float(np.linalg.norm(disk_xy - goal_xy))
-        if d >= 2.0 * r:
-            overlap = 0.0
-        else:
-            cos_arg = np.clip(d / (2.0 * r), -1.0 + 1e-7, 1.0 - 1e-7)
-            A = 2.0 * r * r * np.arccos(cos_arg) - 0.5 * d * np.sqrt(
-                max(4.0 * r * r - d * d, 0.0)
-            )
-            overlap = float(np.clip(A / (np.pi * r * r), 0.0, 1.0))
-
+        overlap  = _circle_overlap_frac_np(disk_pos[:2], goal_xyz[:2], float(raw.disk_radius))
         if overlap >= SUCCESS_OVERLAP:
             return True, current_obs
         if np.asarray(term).any() or np.asarray(trunc).any():
             break
 
-    # Final overlap check
     disk_pos = raw.disk.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
-    d = float(np.linalg.norm(disk_pos[:2] - goal_xyz[:2]))
-    r = float(raw.disk_radius)
-    if d >= 2.0 * r:
-        overlap = 0.0
-    else:
-        cos_arg = np.clip(d / (2.0 * r), -1.0 + 1e-7, 1.0 - 1e-7)
-        A = 2.0 * r * r * np.arccos(cos_arg) - 0.5 * d * np.sqrt(
-            max(4.0 * r * r - d * d, 0.0)
-        )
-        overlap = float(np.clip(A / (np.pi * r * r), 0.0, 1.0))
-
+    overlap  = _circle_overlap_frac_np(disk_pos[:2], goal_xyz[:2], float(raw.disk_radius))
     return overlap >= SUCCESS_OVERLAP, current_obs
 
 
