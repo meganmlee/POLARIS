@@ -3,5 +3,6 @@ from .shelf_scene_builder import ShelfSceneBuilder
 from .shelf_retrieve_v1 import ObjectRetrieveFromShelfEnv
 from .place_skill_env import PlaceSkillEnv
 from .pusht_obstacles import PushTWithObstaclesEnv, ReachWithObstaclesEnv, PushCubeWithObstaclesEnv, PickSkillEnv, PushTWallObstaclesEnv
+from .push_o_env import PushOEnv
 
-__all__ = ["compute_shelf_success", "ShelfSceneBuilder", "ObjectRetrieveFromShelfEnv", "PushTWithObstaclesEnv", "ReachWithObstaclesEnv", "PushCubeWithObstaclesEnv", "PickSkillEnv", "PlaceSkillEnv", "PushTWallObstaclesEnv"]
+__all__ = ["compute_shelf_success", "ShelfSceneBuilder", "ObjectRetrieveFromShelfEnv", "PushTWithObstaclesEnv", "ReachWithObstaclesEnv", "PushCubeWithObstaclesEnv", "PickSkillEnv", "PlaceSkillEnv", "PushTWallObstaclesEnv", "PushOEnv"]
