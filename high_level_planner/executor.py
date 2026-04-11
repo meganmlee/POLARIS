@@ -3,8 +3,8 @@ Closed-loop executor: generate subgoals → execute skill → re-plan → repeat
 
 Usage:
     python high_level_planner/executor.py --seed 42 --reach-checkpoint Reach-WithObstacles-v1__1__<timestamp>
-    python high_level_planner/executor.py --seed 42 --skill rrt
-    python high_level_planner/executor.py --seed 3 --max_replans 5 --offline --skill rrt
+    python high_level_planner/executor.py --seed 42 --skill mpc
+    python high_level_planner/executor.py --seed 3 --max_replans 5 --offline --skill mpc
     python high_level_planner/executor.py --seed 0 \\
         --reach-checkpoint Reach-WithObstacles-v1__1__<ts> \\
         --push-cube-checkpoint PushCube-WithObstacles-v1__1__<ts>
@@ -52,7 +52,7 @@ from planning_wrapper.wrappers.maniskill_planning import ManiSkillPlanningWrappe
 
 from llm_plan import region_to_xy
 from env_subgoal_runner import subgoals_from_wrapper
-from reach_rrt import execute as rrt_execute
+from reach_mpc import execute as mpc_execute
 from reach_ppo import execute as ppo_execute
 from pick_cube_ppo import execute as pick_execute
 from place_cube_ppo import execute as place_execute
@@ -84,7 +84,7 @@ def run(
     place_checkpoint: str | None = None,
     push_cube_checkpoint: str | None = None,
 ):
-    control_mode = "pd_ee_delta_pose" if skill == "ppo" else "pd_joint_pos"
+    control_mode = "pd_ee_delta_pose"
     env = gym.make(
         env_id,
         num_envs=1,
@@ -133,7 +133,7 @@ def run(
                 if skill == "ppo":
                     success, obs = ppo_execute(env, obs, goal_xyz, checkpoint=checkpoint, render=render)
                 else:
-                    success, obs = rrt_execute(env, obs, goal_xyz, render=render)
+                    success, obs = mpc_execute(env, obs, goal_xyz, render=render)
 
                 print(f"    → {'OK' if success else 'FAIL'}")
                 if not success:
@@ -222,7 +222,7 @@ if __name__ == "__main__":
     ap.add_argument("--offline",             action="store_true")
     ap.add_argument("--render",              action="store_true", help="Open a viewer window")
     ap.add_argument("--model",               default="gemini-2.5-flash")
-    ap.add_argument("--skill",               default="ppo", choices=["rrt", "ppo"])
+    ap.add_argument("--skill",               default="mpc", choices=["mpc", "ppo"])
     ap.add_argument("--reach-checkpoint",    default=None, dest="reach_checkpoint", help="Reach PPO checkpoint (required for --skill ppo)")
     ap.add_argument("--pick-checkpoint",     default=None, dest="pick_checkpoint",
                     help="Pick skill PPO checkpoint")
