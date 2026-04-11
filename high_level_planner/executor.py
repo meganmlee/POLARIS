@@ -45,6 +45,7 @@ sys.path.insert(0, os.path.join(_ROOT, "skills", "reach"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "pick"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "place"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "push_cube"))
+sys.path.insert(0, os.path.join(_ROOT, "skills", "push_o"))
 
 import envs  # noqa: F401 — registers ManiSkill envs
 import gymnasium as gym
@@ -61,6 +62,7 @@ from place_cube_ppo import execute as place_ppo_execute
 from place_cube_mpc import execute as place_mpc_execute
 from push_cube_ppo import execute as push_cube_ppo_execute
 from push_cube_mpc import execute as push_cube_mpc_execute
+from push_o_ppo import execute as push_o_ppo_execute
 
 
 def _parse_region(state_str: str) -> str | None:
@@ -87,6 +89,7 @@ def run(
     pick_checkpoint: str | None = None,
     place_checkpoint: str | None = None,
     push_cube_checkpoint: str | None = None,
+    push_o_checkpoint: str | None = None,
 ):
     control_mode = "pd_ee_delta_pose"
     env = gym.make(
@@ -253,6 +256,8 @@ if __name__ == "__main__":
                     help="Place skill PPO checkpoint")
     ap.add_argument("--push-cube-checkpoint", default="PushCube", dest="push_cube_checkpoint",
                     help="Push-cube skill PPO checkpoint")
+    ap.add_argument("--push-o-checkpoint", default="PushO", dest="push_o_checkpoint",
+                    help="Push-O skill PPO checkpoint")
     args = ap.parse_args()
     if args.skill == "ppo" and args.reach_checkpoint is None:
         ap.error("--reach-checkpoint is required when using --skill ppo")
@@ -267,4 +272,6 @@ if __name__ == "__main__":
         pick_checkpoint=_resolve_checkpoint(args.pick_checkpoint),
         place_checkpoint=_resolve_checkpoint(args.place_checkpoint),
         push_cube_checkpoint=_resolve_checkpoint(args.push_cube_checkpoint),
+        push_o_checkpoint=_resolve_checkpoint(args.push_o_checkpoint),
     )
+

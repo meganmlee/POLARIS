@@ -8,8 +8,8 @@ import sapien
 import torch
 import mani_skill.envs  # noqa: F401
 from mani_skill.agents.robots import Panda
-from mani_skill.envs.tasks.tabletop.push_t import PushTEnv
 from mani_skill.sensors.camera import CameraConfig
+from envs.push_o_env import PushOEnv
 from mani_skill.utils import sapien_utils
 from mani_skill.utils.building import actors
 from mani_skill.utils.registration import register_env
@@ -17,10 +17,10 @@ from mani_skill.utils.structs import Pose
 
 
 @register_env("PushT-WithObstacles-v1", max_episode_steps=200)
-class PushTWithObstaclesEnv(PushTEnv):
+class PushTWithObstaclesEnv(PushOEnv):
     """PushT with multiple obstacle cubes of different sizes on the table."""
 
-    SUPPORTED_ROBOTS = ["panda_stick", "panda"]
+    SUPPORTED_ROBOTS = ["panda"]
     agent: Panda
 
     def __init__(self, *args, robot_uids="panda", **kwargs):
@@ -47,9 +47,6 @@ class PushTWithObstaclesEnv(PushTEnv):
                             fov=1, near=0.01, far=100)
 
     def _load_scene(self, options: dict):
-        self.T_mass = 0.3
-        self.T_dynamic_friction = 0.8
-        self.T_static_friction = 0.8
         super()._load_scene(options)
 
         self.obstacles = []
@@ -78,7 +75,7 @@ class PushTWithObstaclesEnv(PushTEnv):
         super()._initialize_episode(env_idx, options)
         with torch.device(self.device):
             b = len(env_idx)
-            tee_pos = self.tee.pose.p[env_idx]  # (b, 3)
+            tee_pos = self.disk.pose.p[env_idx]  # (b, 3)
             q_id = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0)
 
             # Randomly choose how many obstacles to place this episode (same count for all envs in batch)

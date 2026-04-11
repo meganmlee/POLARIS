@@ -39,8 +39,9 @@ class PushOEnv(BaseEnv):
 
     disk_radius: float = 0.05
     disk_half_thickness: float = 0.02
-    disk_static_friction: float = 0.3
-    disk_dynamic_friction: float = 0.3
+    disk_mass: float = 0.3
+    disk_static_friction: float = 0.8
+    disk_dynamic_friction: float = 0.8
 
     GOAL_HALF: float = 0.15
     DISK_SPAWN_HALF: float = 0.12
@@ -54,11 +55,13 @@ class PushOEnv(BaseEnv):
         robot_init_qpos_noise: float = 0.02,
         disk_radius: float = 0.05,
         disk_half_thickness: float = 0.02,
+        disk_mass: float = 0.3,
         **kwargs,
     ):
         self.robot_init_qpos_noise = robot_init_qpos_noise
         self.disk_radius = disk_radius
         self.disk_half_thickness = disk_half_thickness
+        self.disk_mass = disk_mass
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
 
     def _load_agent(self, options: dict):
@@ -89,6 +92,7 @@ class PushOEnv(BaseEnv):
         disk_builder.add_cylinder_visual(
             radius=self.disk_radius, half_length=self.disk_half_thickness, material=vm_disk
         )
+        disk_builder._mass = self.disk_mass
         disk_builder.initial_pose = sapien.Pose(
             p=[0.0, 0.0, self.disk_half_thickness], q=_DISK_QUAT
         )
@@ -164,6 +168,10 @@ class PushOEnv(BaseEnv):
             "ee_to_disk":   disk_pos - ee_pos,
             "disk_to_goal": self.goal_pos - disk_pos,
             "overlap_frac": info["overlap_frac"].unsqueeze(-1),
+            # Required by the planning wrapper
+            "tcp_pose":     self.agent.tcp.pose.raw_pose,
+            "obj_pose":     self.disk.pose.raw_pose,
+            "goal_pos":     self.goal_pos,
         }
 
     def compute_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
