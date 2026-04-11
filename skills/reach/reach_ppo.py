@@ -46,8 +46,8 @@ class Args:
     num_eval_envs: int = 8
     reconfiguration_freq: Optional[int] = None
     eval_reconfiguration_freq: Optional[int] = 1
-    num_steps: int = 100
-    num_eval_steps: int = 100
+    num_steps: int = 200
+    num_eval_steps: int = 200
     partial_reset: bool = True
     eval_partial_reset: bool = False
 

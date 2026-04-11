@@ -38,8 +38,8 @@ class Args:
     num_eval_envs: int = 8
     reconfiguration_freq: Optional[int] = None
     eval_reconfiguration_freq: Optional[int] = 1
-    num_steps: int = 50
-    num_eval_steps: int = 50
+    num_steps: int = 200
+    num_eval_steps: int = 200
     partial_reset: bool = True
     eval_partial_reset: bool = False
 
@@ -63,7 +63,7 @@ class Args:
     eval_freq: int = 25
     save_model: bool = True
     capture_video: bool = True
-    save_eval_video_freq: Optional[int] = 5
+    save_eval_video_freq: Optional[int] = 1
 
     evaluate: bool = False
     checkpoint: Optional[str] = None
