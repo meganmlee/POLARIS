@@ -9,7 +9,7 @@ POLARIS (Policy Assignment for Robust Intent-Driven Skill Execution) is a robot 
 - The simulation state is compressed into a PDDL-style representation of object states and constraints, which is passed as context to the LLM
 
 ### Policy Assignment
-- For each subgoal, evaluates **classical motion planning** (MPPI, Cartesian) vs **learned RL policies** (PPO) on efficiency and success rate
+- For each subgoal, evaluates **classical trajectory optimizer** (MPPI, Cartesian) vs **learned RL policies** (PPO) on efficiency and success rate
 - On failure, reassigns the subgoal to an alternative method from the skill library
 - The skill library is designed to grow — new classical or learned backends can be added per skill
 
