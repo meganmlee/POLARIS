@@ -40,6 +40,7 @@ import numpy as np
 # Make project root and all skill dirs importable
 _ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, _ROOT)
+sys.path.insert(0, os.path.join(_ROOT, "skills"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "reach"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "pick"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "place"))
@@ -54,9 +55,12 @@ from llm_plan import region_to_xy
 from env_subgoal_runner import subgoals_from_wrapper
 from reach_mpc import execute as mpc_execute
 from reach_ppo import execute as ppo_execute
-from pick_cube_ppo import execute as pick_execute
-from place_cube_ppo import execute as place_execute
-from push_cube_ppo import execute as push_cube_execute
+from pick_cube_ppo import execute as pick_ppo_execute
+from pick_cube_mpc import execute as pick_mpc_execute
+from place_cube_ppo import execute as place_ppo_execute
+from place_cube_mpc import execute as place_mpc_execute
+from push_cube_ppo import execute as push_cube_ppo_execute
+from push_cube_mpc import execute as push_cube_mpc_execute
 
 
 def _parse_region(state_str: str) -> str | None:
@@ -141,28 +145,31 @@ def run(
                     break
 
             elif sg_skill == "pick":
-                if pick_checkpoint is None:
-                    print("    [SKIP] pick: no --pick-checkpoint provided — re-planning")
-                    skill_failed = True
-                    break
                 if block_idx is None:
                     print(f"    [WARN] could not parse obstacle index from: {state!r}")
                     skill_failed = True
                     break
                 print(f"    → pick cube{block_idx}")
-                success, obs = pick_execute(
-                    env, obs, block_idx, checkpoint=pick_checkpoint, render=render
-                )
+
+                if skill == "ppo":
+                    if pick_checkpoint is None:
+                        print("    [SKIP] pick: no --pick-checkpoint provided — re-planning")
+                        skill_failed = True
+                        break
+                    success, obs = pick_ppo_execute(
+                        env, obs, block_idx, checkpoint=pick_checkpoint, render=render
+                    )
+                else:
+                    success, obs = pick_mpc_execute(
+                        env, obs, block_idx, render=render
+                    )
+
                 print(f"    → {'OK' if success else 'FAIL'}")
                 if not success:
                     skill_failed = True
                     break
 
             elif sg_skill == "place":
-                if place_checkpoint is None:
-                    print("    [SKIP] place: no --place-checkpoint provided — re-planning")
-                    skill_failed = True
-                    break
                 if block_idx is None or region is None:
                     print(f"    [WARN] could not parse block/region from: {state!r}")
                     skill_failed = True
@@ -170,19 +177,25 @@ def run(
                 x, y = region_to_xy(region)
                 goal_xyz = np.array([x, y, 0.02], dtype=np.float32)  # table-surface height
                 print(f"    → place cube{block_idx} at {np.round(goal_xyz, 3)}")
-                success, obs = place_execute(
-                    env, obs, block_idx, goal_xyz, checkpoint=place_checkpoint, render=render
-                )
+
+                if skill == "ppo":
+                    if place_checkpoint is None:
+                        print("    [SKIP] place: no --place-checkpoint provided — re-planning")
+                        skill_failed = True
+                        break
+                    success, obs = place_ppo_execute(
+                        env, obs, block_idx, goal_xyz, checkpoint=place_checkpoint, render=render
+                    )
+                else:
+                    success, obs = place_mpc_execute(
+                        env, obs, block_idx, goal_xyz, render=render
+                    )
                 print(f"    → {'OK' if success else 'FAIL'}")
                 if not success:
                     skill_failed = True
                     break
 
             elif sg_skill == "push_cube":
-                if push_cube_checkpoint is None:
-                    print("    [SKIP] push_cube: no --push-cube-checkpoint provided — re-planning")
-                    skill_failed = True
-                    break
                 if block_idx is None or region is None:
                     print(f"    [WARN] could not parse block/region from: {state!r}")
                     skill_failed = True
@@ -190,9 +203,19 @@ def run(
                 x, y = region_to_xy(region)
                 goal_xyz = np.array([x, y, 0.0], dtype=np.float32)
                 print(f"    → push_cube obstacle{block_idx} to {np.round(goal_xyz, 3)}")
-                success, obs = push_cube_execute(
-                    env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=render
-                )
+
+                if skill == "ppo":
+                    if push_cube_checkpoint is None:
+                        print("    [SKIP] push_cube: no --push-cube-checkpoint provided — re-planning")
+                        skill_failed = True
+                        break
+                    success, obs = push_cube_ppo_execute(
+                        env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=render
+                    )
+                else:
+                    success, obs = push_cube_mpc_execute(
+                        env, obs, block_idx, goal_xyz, render=render
+                    )
                 print(f"    → {'OK' if success else 'FAIL'}")
                 if not success:
                     skill_failed = True
@@ -222,7 +245,7 @@ if __name__ == "__main__":
     ap.add_argument("--offline",             action="store_true")
     ap.add_argument("--render",              action="store_true", help="Open a viewer window")
     ap.add_argument("--model",               default="gemini-2.5-flash")
-    ap.add_argument("--skill",               default="mpc", choices=["mpc", "ppo"])
+    ap.add_argument("--skill",               default="ppo", choices=["mpc", "ppo"])
     ap.add_argument("--reach-checkpoint",    default=None, dest="reach_checkpoint", help="Reach PPO checkpoint (required for --skill ppo)")
     ap.add_argument("--pick-checkpoint",     default=None, dest="pick_checkpoint",
                     help="Pick skill PPO checkpoint")
