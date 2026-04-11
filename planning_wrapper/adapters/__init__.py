@@ -1,5 +1,5 @@
 from .base import BaseTaskAdapter
-from .pusht import PushTTaskAdapter
+from .pusho import PushOTaskAdapter
 from .shelf_retrieve import ShelfRetrieveTaskAdapter
 
-__all__ = ["BaseTaskAdapter", "PushTTaskAdapter", "ShelfRetrieveTaskAdapter"]
+__all__ = ["BaseTaskAdapter", "PushOTaskAdapter", "ShelfRetrieveTaskAdapter"]

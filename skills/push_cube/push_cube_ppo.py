@@ -106,7 +106,7 @@ def execute(
     device: str = "cpu",
 ) -> tuple[bool, dict]:
     """
-    Run the PPO push-cube policy on an already-running PushT env to push
+    Run the PPO push-cube policy on an already-running PushO env to push
     obstacle[block_idx] to goal_xyz.
     Requires a checkpoint trained on PushCube-WithObstacles-v1 with obs_mode='state'.
     Returns (success, latest_obs).

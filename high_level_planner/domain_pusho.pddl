@@ -1,5 +1,5 @@
 ; =============================================================================
-; PDDL domain: PushT with obstacles (tabletop manipulation)
+; PDDL domain: PushO with obstacles (tabletop manipulation)
 ; =============================================================================
 ; TABLE: Grid of regions r_m_n (m=row, n=column). Goal = one of these regions.
 ; OBSTACLES: 10 obstacle cubes (obstacle0..obstacle9). Each obstacle has a SIZE relative to
@@ -9,16 +9,16 @@
 ;   - (push-only ?b): obstacle is BIGGER than gripper → cannot pick; use PUSH_CUBE
 ;     to push it one cell out of the way.
 ; The planner must figure out from (pickable obstaclei) and (push-only obstaclej) which
-; action to use for each obstacle. Main objective: get the tee to the goal region.
+; action to use for each obstacle. Main objective: get the disk to the goal region.
 ; =============================================================================
 
-(define (domain pusht)
+(define (domain pusho)
   (:requirements :strips :typing)
-  (:types robot tee obstacle region)
+  (:types robot disk obstacle region)
 
   (:predicates
     (robot-at ?r - robot ?loc - region)
-    (object-at ?o - tee ?loc - region)
+    (object-at ?o - disk ?loc - region)
     (obstacle-at ?b - obstacle ?loc - region)
     (holding ?r - robot ?b - obstacle)
     (goal-at ?loc - region)
@@ -32,10 +32,10 @@
     :precondition (and (robot-at ?rob ?from) (adjacent ?from ?to))
     :effect (and (robot-at ?rob ?to) (not (robot-at ?rob ?from))))
 
-  (:action push_tee
+  (:action push_disk
     :parameters (?rob - robot ?from ?to - region)
-    :precondition (and (robot-at ?rob ?from) (object-at tee ?from) (adjacent ?from ?to) (clear ?to))
-    :effect (and (object-at tee ?to) (not (object-at tee ?from)) (robot-at ?rob ?to) (not (robot-at ?rob ?from))))
+    :precondition (and (robot-at ?rob ?from) (object-at disk ?from) (adjacent ?from ?to) (clear ?to))
+    :effect (and (object-at disk ?to) (not (object-at disk ?from)) (robot-at ?rob ?to) (not (robot-at ?rob ?from))))
 
   (:action pick
     :parameters (?rob - robot ?b - obstacle ?loc - region)

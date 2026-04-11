@@ -1,4 +1,4 @@
-"""PushT with obstacle blocks on the table, plus skill-specific subclasses."""
+"""PushO with obstacle blocks on the table, plus skill-specific subclasses."""
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -16,9 +16,9 @@ from mani_skill.utils.registration import register_env
 from mani_skill.utils.structs import Pose
 
 
-@register_env("PushT-WithObstacles-v1", max_episode_steps=200)
-class PushTWithObstaclesEnv(PushOEnv):
-    """PushT with multiple obstacle cubes of different sizes on the table."""
+@register_env("PushO-WithObstacles-v1", max_episode_steps=200)
+class PushOWithObstaclesEnv(PushOEnv):
+    """PushO with multiple obstacle cubes of different sizes on the table."""
 
     SUPPORTED_ROBOTS = ["panda"]
     agent: Panda
@@ -66,8 +66,8 @@ class PushTWithObstaclesEnv(PushOEnv):
     MAX_OBSTACLES: int = 10
     # Table half-extent (must stay within this XY radius of origin)
     TABLE_HALF: float = 0.25
-    # Minimum distance between an obstacle and the tee centre
-    MIN_DIST_FROM_TEE: float = 0.06
+    # Minimum distance between an obstacle and the disk centre
+    MIN_DIST_FROM_DISK: float = 0.06
     # Minimum distance between two obstacles
     MIN_DIST_BETWEEN: float = 0.05
 
@@ -75,7 +75,7 @@ class PushTWithObstaclesEnv(PushOEnv):
         super()._initialize_episode(env_idx, options)
         with torch.device(self.device):
             b = len(env_idx)
-            tee_pos = self.disk.pose.p[env_idx]  # (b, 3)
+            disk_pos = self.disk.pose.p[env_idx]  # (b, 3)
             q_id = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0)
 
             # Randomly choose how many obstacles to place this episode (same count for all envs in batch)
@@ -90,11 +90,11 @@ class PushTWithObstaclesEnv(PushOEnv):
                     # Sample random XY positions with rejection for each env independently
                     xy = torch.zeros((b, 2), device=self.device)
                     for env_i in range(b):
-                        tee_xy = tee_pos[env_i, :2]
+                        disk_xy = disk_pos[env_i, :2]
                         for _ in range(50):
                             candidate = (torch.rand(2, device=self.device) * 2 - 1) * self.TABLE_HALF
-                            # Reject if too close to tee
-                            if torch.norm(candidate - tee_xy) < self.MIN_DIST_FROM_TEE:
+                            # Reject if too close to disk
+                            if torch.norm(candidate - disk_xy) < self.MIN_DIST_FROM_DISK:
                                 continue
                             # Reject if too close to any already-placed obstacle
                             too_close = any(
@@ -109,7 +109,7 @@ class PushTWithObstaclesEnv(PushOEnv):
                             # Fallback: fixed offset if sampling fails
                             fallback = [(0.08, 0.10), (-0.06, 0.12), (0.10, -0.08), (-0.10, -0.06)]
                             dx, dy = fallback[i % len(fallback)]
-                            xy[env_i] = tee_xy + torch.tensor([dx, dy], device=self.device)
+                            xy[env_i] = disk_xy + torch.tensor([dx, dy], device=self.device)
 
                     placed_xy.append(xy)
                     xyz = torch.cat([xy, torch.full((b, 1), half, device=self.device)], dim=1)
@@ -123,8 +123,8 @@ class PushTWithObstaclesEnv(PushOEnv):
 
 
 @register_env("Reach-WithObstacles-v1", max_episode_steps=200)
-class ReachWithObstaclesEnv(PushTWithObstaclesEnv):
-    """Move EE to a random goal above the table. Same scene as PushT-WithObstacles.
+class ReachWithObstaclesEnv(PushOWithObstaclesEnv):
+    """Move EE to a random goal above the table. Same scene as PushO-WithObstacles.
 
     Observation extras: goal_pos (3,), ee_pos (3,), ee_to_goal (3,)
     Success: EE within 2 cm of goal.
@@ -167,7 +167,7 @@ class ReachWithObstaclesEnv(PushTWithObstaclesEnv):
 
 
 @register_env("PushCube-WithObstacles-v1", max_episode_steps=200)
-class PushCubeWithObstaclesEnv(PushTWithObstaclesEnv):
+class PushCubeWithObstaclesEnv(PushOWithObstaclesEnv):
     """Push a randomly selected obstacle cube to a goal position on the table.
 
     Each episode a different obstacle is chosen as the push target.
@@ -230,16 +230,16 @@ class PushCubeWithObstaclesEnv(PushTWithObstaclesEnv):
         return self.compute_dense_reward(obs, action, info) / 7.0
 
 
-@register_env("PushT-WallObstacles-v1", max_episode_steps=200)
-class PushTWallObstaclesEnv(PushTWithObstaclesEnv):
-    """PushT where all 10 obstacle cubes are fixed in a wall across the table.
+@register_env("PushO-WallObstacles-v1", max_episode_steps=200)
+class PushOWallObstaclesEnv(PushOWithObstaclesEnv):
+    """PushO where all 10 obstacle cubes are fixed in a wall across the table.
 
     All cubes are placed along WALL_ROW (grid row index), one per grid column.
-    This guarantees every BFS path from tee to goal that crosses the wall is
+    This guarantees every BFS path from disk to goal that crosses the wall is
     blocked, forcing the high-level planner to emit pick/place or push_cube
     subgoals rather than just routing around obstacles.
 
-    Tee and goal positions are inherited (random from PushTEnv). Seeds where
+    Disk and goal positions are inherited (random from PushOEnv). Seeds where
     both land on the same side of the wall still work — the planner simply
     won't need to clear the wall for those episodes.
     """
@@ -256,7 +256,7 @@ class PushTWallObstaclesEnv(PushTWithObstaclesEnv):
     _GRID: int = 10
 
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
-        # Let PushTWithObstaclesEnv set up tee, goal, robot positions first,
+        # Let PushOWithObstaclesEnv set up disk, goal, robot positions first,
         # then immediately reposition every obstacle into the wall.
         super()._initialize_episode(env_idx, options)
         with torch.device(self.device):
@@ -278,7 +278,7 @@ class PushTWallObstaclesEnv(PushTWithObstaclesEnv):
 
 
 @register_env("PickSkillEnv", max_episode_steps=100)
-class PickSkillEnv(PushTWithObstaclesEnv):
+class PickSkillEnv(PushOWithObstaclesEnv):
     """Pick a randomly selected obstacle cube off the table.
 
     Each episode one of the inherited obstacle cubes is chosen as the pick

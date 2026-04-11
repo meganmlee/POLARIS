@@ -1,5 +1,5 @@
 """
-PushT-with-obstacles subgoal planning.
+PushO-with-obstacles subgoal planning.
 
 Order: Gemini proposes logical steps → optional repair against a full symbolic plan
 (pyperplan) so the sequence is sound → else full PDDL plan → else BFS.
@@ -23,7 +23,7 @@ TILE_SIZE_M = (2.0 * TABLE_BOUND) / GRID
 NUM_OBSTACLES = 10
 NUM_PICKABLE = 5
 
-VALID_SKILLS = frozenset({"reach", "push_tee", "pick", "place", "push_cube"})
+VALID_SKILLS = frozenset({"reach", "push_disk", "pick", "place", "push_cube"})
 
 
 def _region_to_name(idx: int) -> str:
@@ -82,8 +82,8 @@ def _region_layout_comment() -> str:
     )
 
 
-def state_to_problem(tee_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray, obstacle_regions: list) -> str:
-    rt = _xy_to_region(tee_xy[0], tee_xy[1])
+def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray, obstacle_regions: list) -> str:
+    rd = _xy_to_region(disk_xy[0], disk_xy[1])
     rg = _xy_to_region(goal_xy[0], goal_xy[1])
     re = _xy_to_region(ee_xy[0], ee_xy[1])
     obstacles = list(obstacle_regions)[:NUM_OBSTACLES]
@@ -91,10 +91,10 @@ def state_to_problem(tee_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray,
     n_pickable = min(NUM_PICKABLE, n_obstacles)
     region_set = set(obstacles)
     region_names = [_region_to_name(i) for i in range(GRID * GRID)]
-    objects = "robot1 - robot tee - tee " + " ".join(f"obstacle{i}" for i in range(n_obstacles)) + " - obstacle " + " ".join(region_names) + " - region"
+    objects = "robot1 - robot disk - disk " + " ".join(f"obstacle{i}" for i in range(n_obstacles)) + " - obstacle " + " ".join(region_names) + " - region"
     init = [
         f"(robot-at robot1 {_region_to_name(re)})",
-        f"(object-at tee {_region_to_name(rt)})",
+        f"(object-at disk {_region_to_name(rd)})",
         f"(goal-at {_region_to_name(rg)})",
     ]
     for i in range(n_pickable):
@@ -108,26 +108,26 @@ def state_to_problem(tee_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray,
             init.append(f"(clear {_region_to_name(i)})")
     for a, b in _adjacent_pairs():
         init.append(f"(adjacent {_region_to_name(a)} {_region_to_name(b)})")
-    goal = f"(object-at tee {_region_to_name(rg)})"
-    path_tee_to_goal_cells = set(_bfs_path(rt, rg, set()))
-    obstacles_on_path = [i for i in range(n_obstacles) if obstacles[i] in path_tee_to_goal_cells]
+    goal = f"(object-at disk {_region_to_name(rg)})"
+    path_disk_to_goal_cells = set(_bfs_path(rd, rg, set()))
+    obstacles_on_path = [i for i in range(n_obstacles) if obstacles[i] in path_disk_to_goal_cells]
     obstacle_list = ", ".join(f"obstacle{i}@{_region_to_name(obstacles[i])}" for i in range(n_obstacles))
     on_path_str = (
         f" Obstacles ON THE PATH (clear first): " + ", ".join(f"obstacle{i} at {_region_to_name(obstacles[i])}" for i in obstacles_on_path) + "."
-    ) if obstacles_on_path else " No obstacles on direct tee→goal path; may still need clears."
+    ) if obstacles_on_path else " No obstacles on direct disk→goal path; may still need clears."
     pickable_range = f"obstacle0..{n_pickable - 1}" if n_pickable > 0 else "none"
     pushonly_range = f"obstacle{n_pickable}..{n_obstacles - 1}" if n_pickable < n_obstacles else "none"
     scenario = (
-        f"; robot={_region_to_name(re)}, tee={_region_to_name(rt)}, goal={_region_to_name(rg)}. Obstacles: {obstacle_list}. "
+        f"; robot={_region_to_name(re)}, disk={_region_to_name(rd)}, goal={_region_to_name(rg)}. Obstacles: {obstacle_list}. "
         f"{pickable_range} pickable (pick+place); {pushonly_range} push-only (push_cube). "
         f"{on_path_str} "
         "Output: one line per subgoal, SKILL<TAB>STATE (one PDDL atom in parens)."
     )
-    return f"""; PushT with obstacles — tee to goal.
+    return f"""; PushO with obstacles — disk to goal.
 {_region_layout_comment()}
 {scenario}
-(define (problem pusht-1)
-  (:domain pusht)
+(define (problem pusho-1)
+  (:domain pusho)
   (:objects {objects})
   (:init
     {" ".join(init)}
@@ -149,11 +149,11 @@ def _load_config():
 
 def _parse_problem_regions(problem_str: str):
     robot = re.search(r"\(robot-at robot1 (r_\d+_\d+)\)", problem_str)
-    tee = re.search(r"\(object-at tee (r_\d+_\d+)\)", problem_str)
+    disk = re.search(r"\(object-at disk (r_\d+_\d+)\)", problem_str)
     goal = re.search(r"\(goal-at (r_\d+_\d+)\)", problem_str)
     blocked = set(_name_to_idx(m.group(1)) for m in re.finditer(r"\(obstacle-at obstacle\d+ (r_\d+_\d+)\)", problem_str))
     return (
-        _name_to_idx(tee.group(1)) if tee else 0,
+        _name_to_idx(disk.group(1)) if disk else 0,
         _name_to_idx(goal.group(1)) if goal else 0,
         _name_to_idx(robot.group(1)) if robot else 0,
         blocked,
@@ -195,13 +195,13 @@ def _parse_obstacle_info(problem_str: str) -> tuple[dict, set, set]:
     return positions, pickable, push_only
 
 
-def _clear_path_subgoals(tee_r: int, goal_r: int, blocked: set, problem_str: str) -> list[dict]:
+def _clear_path_subgoals(disk_r: int, goal_r: int, blocked: set, problem_str: str) -> list[dict]:
     """
-    When no tee→goal path exists around blocks, generate pick/place or push_cube
-    subgoals to clear the blocks sitting on the direct (unblocked) tee→goal route.
+    When no disk→goal path exists around blocks, generate pick/place or push_cube
+    subgoals to clear the blocks sitting on the direct (unblocked) disk→goal route.
     After these subgoals the executor re-plans, at which point a free path should exist.
     """
-    direct_path = _bfs_path(tee_r, goal_r, set())
+    direct_path = _bfs_path(disk_r, goal_r, set())
     if not direct_path:
         return []
 
@@ -252,37 +252,37 @@ def _clear_path_subgoals(tee_r: int, goal_r: int, blocked: set, problem_str: str
 
 
 def compute_subgoals(problem_str: str) -> list[dict]:
-    tee_r, goal_r, robot_r, blocked = _parse_problem_regions(problem_str)
-    path_robot_to_tee = _bfs_path(robot_r, tee_r, blocked)
-    path_tee_to_goal  = _bfs_path(tee_r, goal_r, blocked)
+    disk_r, goal_r, robot_r, blocked = _parse_problem_regions(problem_str)
+    path_robot_to_disk = _bfs_path(robot_r, disk_r, blocked)
+    path_disk_to_goal  = _bfs_path(disk_r, goal_r, blocked)
     subgoals = []
-    if path_robot_to_tee and path_robot_to_tee[-1] == tee_r:
-        subgoals.append({"skill": "reach", "state": f"(robot-at robot1 {_region_to_name(tee_r)})"})
-    if path_tee_to_goal:
-        for i in range(1, len(path_tee_to_goal)):
-            subgoals.append({"skill": "push_tee", "state": f"(object-at tee {_region_to_name(path_tee_to_goal[i])})"})
+    if path_robot_to_disk and path_robot_to_disk[-1] == disk_r:
+        subgoals.append({"skill": "reach", "state": f"(robot-at robot1 {_region_to_name(disk_r)})"})
+    if path_disk_to_goal:
+        for i in range(1, len(path_disk_to_goal)):
+            subgoals.append({"skill": "push_disk", "state": f"(object-at disk {_region_to_name(path_disk_to_goal[i])})"})
     else:
         # All routes blocked — emit clearing subgoals for blocks on the direct path,
-        # then append push_tee steps using a BFS path with those blocks removed.
-        subgoals.extend(_clear_path_subgoals(tee_r, goal_r, blocked, problem_str))
-        direct_path = _bfs_path(tee_r, goal_r, set())
+        # then append push_disk steps using a BFS path with those blocks removed.
+        subgoals.extend(_clear_path_subgoals(disk_r, goal_r, blocked, problem_str))
+        direct_path = _bfs_path(disk_r, goal_r, set())
         cleared_cells = set(direct_path) & blocked
-        new_path = _bfs_path(tee_r, goal_r, blocked - cleared_cells)
+        new_path = _bfs_path(disk_r, goal_r, blocked - cleared_cells)
         if new_path and len(new_path) >= 2:
-            subgoals.append({"skill": "reach", "state": f"(robot-at robot1 {_region_to_name(tee_r)})"})
+            subgoals.append({"skill": "reach", "state": f"(robot-at robot1 {_region_to_name(disk_r)})"})
             for i in range(1, len(new_path)):
-                subgoals.append({"skill": "push_tee", "state": f"(object-at tee {_region_to_name(new_path[i])})"})
-    if not subgoals and path_tee_to_goal and path_tee_to_goal[0] != goal_r:
-        subgoals.append({"skill": "push_tee", "state": f"(object-at tee {_region_to_name(goal_r)})"})
+                subgoals.append({"skill": "push_disk", "state": f"(object-at disk {_region_to_name(new_path[i])})"})
+    if not subgoals and path_disk_to_goal and path_disk_to_goal[0] != goal_r:
+        subgoals.append({"skill": "push_disk", "state": f"(object-at disk {_region_to_name(goal_r)})"})
     return subgoals
 
 
-def _push_tee_subgoals_only(problem_str: str) -> list[dict]:
-    tee_r, goal_r, _, blocked = _parse_problem_regions(problem_str)
-    path = _bfs_path(tee_r, goal_r, blocked)
+def _push_disk_subgoals_only(problem_str: str) -> list[dict]:
+    disk_r, goal_r, _, blocked = _parse_problem_regions(problem_str)
+    path = _bfs_path(disk_r, goal_r, blocked)
     if len(path) < 2:
         return []
-    return [{"skill": "push_tee", "state": f"(object-at tee {_region_to_name(path[i])})"} for i in range(1, len(path))]
+    return [{"skill": "push_disk", "state": f"(object-at disk {_region_to_name(path[i])})"} for i in range(1, len(path))]
 
 
 def run_pddl_planner(domain_path: str, problem_str: str, timeout: int = 60) -> str | None:
@@ -325,9 +325,9 @@ def plan_to_subgoals(plan_str: str, _problem_str: str) -> list[dict]:
         if m:
             subgoals.append({"skill": "reach", "state": f"(robot-at robot1 {m.group(1)})"})
             continue
-        m = re.match(r"\(push_tee robot1 r_\d+_\d+ (r_\d+_\d+)\)", line)
+        m = re.match(r"\(push_disk robot1 r_\d+_\d+ (r_\d+_\d+)\)", line)
         if m:
-            subgoals.append({"skill": "push_tee", "state": f"(object-at tee {m.group(1)})"})
+            subgoals.append({"skill": "push_disk", "state": f"(object-at disk {m.group(1)})"})
             continue
         m = re.match(r"\(pick robot1 (obstacle\d+) r_\d+_\d+\)", line)
         if m:
@@ -394,9 +394,9 @@ Each line is one milestone: the SKILL that achieves it, then TAB, then the targe
 
 Rules:
 - Order matters: earlier lines must be achievable before later ones.
-- End with: push_tee	(object-at tee {goal_region})
-- Before that push chain: if obstacles block the path, clear them (pick/place or push_cube), then reach to the tee's cell, then many push_tee steps (one grid cell per push_tee toward {goal_region}).
-- Skills: reach, push_tee, pick, place, push_cube. States: (robot-at robot1 r_i_j), (object-at tee r_i_j), (holding robot1 obstacleN), (obstacle-at obstacleN r_i_j).
+- End with: push_disk	(object-at disk {goal_region})
+- Before that push chain: if obstacles block the path, clear them (pick/place or push_cube), then reach to the disk's cell, then many push_disk steps (one grid cell per push_disk toward {goal_region}).
+- Skills: reach, push_disk, pick, place, push_cube. States: (robot-at robot1 r_i_j), (object-at disk r_i_j), (holding robot1 obstacleN), (obstacle-at obstacleN r_i_j).
 
 Domain:
 {domain}
@@ -436,16 +436,16 @@ def _align_gemini_to_symbolic(gemini_steps: list[dict], symbolic_steps: list[dic
     return out
 
 
-def _ensure_tee_goal_tail(subgoals: list[dict], problem_str: str) -> list[dict]:
+def _ensure_disk_goal_tail(subgoals: list[dict], problem_str: str) -> list[dict]:
     out = list(subgoals)
     goal_region = _goal_region_from_problem(problem_str)
     if not goal_region:
         return out
-    goal_state = f"(object-at tee {goal_region})"
+    goal_state = f"(object-at disk {goal_region})"
     if out and out[-1].get("state") == goal_state:
         return out
     seen = {s["state"] for s in out}
-    for e in _push_tee_subgoals_only(problem_str):
+    for e in _push_disk_subgoals_only(problem_str):
         if e["state"] not in seen:
             out.append(e)
             seen.add(e["state"])
@@ -466,7 +466,7 @@ def get_subgoals(
     Default: Gemini logical subgoals → merge with full symbolic plan (sound order/skills where needed).
     Fallbacks: symbolic plan only → BFS.
 
-    use_llm_first=True: Gemini only (+ optional push_tee tail), no pyperplan repair.
+    use_llm_first=True: Gemini only (+ optional push_disk tail), no pyperplan repair.
     SUBGOAL_PDDL_FIRST=1 or LLM_PLAN_PLANNER_FIRST: pyperplan first (old behavior).
     """
     if offline or os.environ.get("LLM_PLAN_OFFLINE"):
@@ -492,7 +492,7 @@ def get_subgoals(
             gemini = []
         if not gemini:
             return compute_subgoals(problem_str)
-        return _ensure_tee_goal_tail(gemini, problem_str)
+        return _ensure_disk_goal_tail(gemini, problem_str)
 
     with open(domain_path, "r") as f:
         domain_text = f.read()
@@ -509,7 +509,7 @@ def get_subgoals(
             return plan_to_subgoals(plan, problem_str)
         return compute_subgoals(problem_str)
 
-    gemini = _ensure_tee_goal_tail(gemini, problem_str)
+    gemini = _ensure_disk_goal_tail(gemini, problem_str)
 
     plan = run_pddl_planner(domain_path, problem_str)
     if plan:

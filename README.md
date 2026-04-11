@@ -22,14 +22,14 @@ Each skill has multiple backends sharing the same environment, so methods are di
 | Push Cube | MPPI (`push_cube_mpc.py`) | PPO (`push_cube_ppo.py`) | `PushCube-WithObstacles-v1` |
 | Pick | MPPI (`pick_cube_mpc.py`) | PPO (`pick_cube_ppo.py`) | `PickSkillEnv` |
 | Place | MPPI (`place_cube_mpc.py`) | PPO (`place_cube_ppo.py`) | `PlaceSkillEnv` |
-| Push T | — | — | `PushT-WithObstacles-v1` |
+| Push O | — | — | `PushO-WithObstacles-v1` |
 
 ## Project Structure
 
 ```
 POLARIS/
 ├── envs/                          # Custom ManiSkill environments (shared across methods)
-│   ├── pusht_obstacles.py         # PushT, PushCube, Reach with obstacle variants
+│   ├── pusho_obstacles.py         # PushO, PushCube, Reach with obstacle variants
 │   ├── shelf_retrieve_v1.py       # Object retrieval from shelf
 │   └── shelf_scene_builder.py
 ├── skills/                        # Skill backends
@@ -48,7 +48,7 @@ POLARIS/
 │       └── reach_mpc.py           # Classical: MPPI controller
 ├── examples/                      # Demos and visualization
 │   ├── push_cube_ppo_demo.py
-│   ├── pusht_obstacles_demo.py
+│   ├── pusho_obstacles_demo.py
 │   ├── reach_demo.py              # Proportional controller baseline
 │   ├── reach_ppo_demo.py
 │   ├── reach_mpc_demo.py          # MPPI reach demo
@@ -58,7 +58,7 @@ POLARIS/
 │   ├── llm_plan.py                # PDDL problem builder + LLM/symbolic/BFS planner
 │   ├── env_subgoal_runner.py      # Live env or dummy state → subgoals
 │   ├── executor.py                # Closed-loop executor: plan → execute skill → re-plan
-│   ├── domain_pusht.pddl          # PDDL domain (actions, predicates)
+│   ├── domain_pusho.pddl          # PDDL domain (actions, predicates)
 │   └── config.json.example        # Gemini API config template
 ├── planning_wrapper/              # State clone/restore utilities for planning backends
 └── checkpoints/                          # Training checkpoints (auto-created)
@@ -134,7 +134,7 @@ All environments are in [envs/](envs/) and registered on `import envs`. RL and p
 |---|---|---|
 | `Reach-WithObstacles-v1` | MoveToPoint | 4 randomized obstacle cubes |
 | `PushCube-WithObstacles-v1` | PushCube | 4 randomized obstacle cubes |
-| `PushT-WithObstacles-v1` | PushT | 4 randomized obstacle cubes |
+| `PushO-WithObstacles-v1` | PushO | 4 randomized obstacle cubes |
 | `ObjectRetrieveFromShelf-v1` | Custom | Cluttered shelf, randomized target |
 
 ## Training & Evaluation
@@ -191,8 +191,8 @@ python examples/reach_ppo_demo.py --checkpoint checkpoints/<run>/final_ckpt.pt -
 python examples/push_cube_ppo_demo.py
 python examples/push_cube_ppo_demo.py --checkpoint checkpoints/<run>/final_ckpt.pt
 
-# PushT
-python examples/pusht_obstacles_demo.py
+# PushO
+python examples/pusho_obstacles_demo.py
 ```
 
 ## Planning Wrapper
@@ -201,12 +201,12 @@ Planning backends (RRT, etc.) require branching and backtracking without a full 
 
 ```python
 from planning_wrapper import ManiSkillPlanningWrapper
-from planning_wrapper.adapters import PushTTaskAdapter
+from planning_wrapper.adapters import PushOTaskAdapter
 import gymnasium as gym
 import envs
 
-env = gym.make("PushT-WithObstacles-v1", obs_mode="state_dict", control_mode="pd_ee_delta_pose")
-wrapper = ManiSkillPlanningWrapper(env, adapter=PushTTaskAdapter())
+env = gym.make("PushO-WithObstacles-v1", obs_mode="state_dict", control_mode="pd_ee_delta_pose")
+wrapper = ManiSkillPlanningWrapper(env, adapter=PushOTaskAdapter())
 
 obs, info = wrapper.reset(seed=0)
 snapshot = wrapper.clone_state()   # save branch point
@@ -214,7 +214,7 @@ snapshot = wrapper.clone_state()   # save branch point
 wrapper.restore_state(snapshot)    # backtrack
 ```
 
-Available adapters: `PushTTaskAdapter`, `ShelfRetrieveTaskAdapter`.
+Available adapters: `PushOTaskAdapter`, `ShelfRetrieveTaskAdapter`.
 
 ## High-Level Planner
 
@@ -241,8 +241,8 @@ SUBGOAL_PDDL_FIRST=1 python high_level_planner/llm_plan.py --live  # symbolic pl
 Example output:
 ```
 reach	(robot-at robot1 r_5_5)
-push_tee	(object-at tee r_4_5)
-push_tee	(object-at tee r_3_5)
+push_disk	(object-at disk r_4_5)
+push_disk	(object-at disk r_3_5)
 ```
 
 ### `env_subgoal_runner.py` — State Builder
@@ -276,9 +276,9 @@ python high_level_planner/executor.py
 
 Checkpoint args accept either a full path or a run name under `checkpoints/` (e.g. `Reach-WithObstacles-v1__1__1773025568` expands to `checkpoints/.../final_ckpt.pt`). By default, all checkpoints under `checkpoints/` with short names (e.g. PickSkill) without timestamps will be used.
 
-### `domain_pusht.pddl` — PDDL Domain
+### `domain_pusho.pddl` — PDDL Domain
 
-Defines the world model used by the symbolic planner: types (`robot`, `tee`, `obstacle`, `region`), predicates (`robot-at`, `object-at`, `obstacle-at`, `holding`, `pickable`, `push-only`, `clear`, `adjacent`), and actions (`reach`, `push_tee`, `pick`, `place`, `push_cube`).
+Defines the world model used by the symbolic planner: types (`robot`, `disk`, `obstacle`, `region`), predicates (`robot-at`, `object-at`, `obstacle-at`, `holding`, `pickable`, `push-only`, `clear`, `adjacent`), and actions (`reach`, `push_disk`, `pick`, `place`, `push_cube`).
 
 ### `config.json.example` — Gemini Config Template
 

@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.join(_ROOT, "skills", "push_o"))
 
 import envs  # noqa: F401 — registers ManiSkill envs
 import gymnasium as gym
-from planning_wrapper.adapters import PushTTaskAdapter
+from planning_wrapper.adapters import PushOTaskAdapter
 from planning_wrapper.wrappers.maniskill_planning import ManiSkillPlanningWrapper
 
 from llm_plan import region_to_xy
@@ -84,7 +84,7 @@ def run(
     model: str = "gemini-2.5-flash",
     render: bool = False,
     skill: str = "ppo",
-    env_id: str = "PushT-WallObstacles-v1",
+    env_id: str = "PushO-WallObstacles-v1",
     checkpoint: str | None = None,
     pick_checkpoint: str | None = None,
     place_checkpoint: str | None = None,
@@ -104,7 +104,7 @@ def run(
         _orig_render = env.render
         env.render = lambda *a, **kw: (_orig_render(*a, **kw), time.sleep(0.05))[0]
 
-    wrapper = ManiSkillPlanningWrapper(env, adapter=PushTTaskAdapter())
+    wrapper = ManiSkillPlanningWrapper(env, adapter=PushOTaskAdapter())
     obs, _ = wrapper.reset(seed=seed)
 
     for replan_i in range(max_replans):
@@ -224,8 +224,8 @@ def run(
                     skill_failed = True
                     break
 
-            elif sg_skill == "push_tee":
-                print(f"    [SKIP] 'push_tee' not yet implemented — re-planning")
+            elif sg_skill == "push_disk":
+                print(f"    [SKIP] 'push_disk' not yet implemented — re-planning")
                 skill_failed = True
                 break
 

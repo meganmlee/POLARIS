@@ -122,7 +122,7 @@ def execute(
     device: str = "cpu",
 ) -> tuple[bool, dict]:
     """
-    Run the PPO place policy on an already-running PushT env to set
+    Run the PPO place policy on an already-running PushO env to set
     obstacle[block_idx] down at goal_xyz, then retreat.
     Requires a checkpoint trained on PlaceSkillEnv with obs_mode='state'.
     Returns (success, latest_obs).
