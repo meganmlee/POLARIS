@@ -1,14 +1,5 @@
 """
-Skill: reach a goal EE position using MPPI (Model Predictive Path Integral)
-control in task space.
-
-MPPI (Williams et al., 2016-2017) is a sampling-based MPC algorithm:
-  1. Sample K random action sequences over horizon H (Gaussian perturbations).
-  2. Roll each out through dynamics to get K trajectories.
-  3. Compute a scalar cost per trajectory.
-  4. Weight samples by exp(-cost / lambda) -- low-cost trajectories dominate.
-  5. Weighted average of action sequences -> new nominal sequence.
-  6. Execute first action. Shift nominal forward. Repeat.
+Skill: reach a goal EE position using MPPI in task space.
 
 Control: pd_ee_delta_pose (Cartesian delta position + orientation + gripper).
 
@@ -23,100 +14,40 @@ import time
 
 import gymnasium as gym
 import numpy as np
-import torch
 
 import sys
 import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # registers Reach-WithObstacles-v1
 
+from mpc_base import MPPIBase, get_ee_pos, step_env
 
-class MPPI:
-    """
-    Model Predictive Path Integral controller for Cartesian EE reaching.
 
-    Actions are 3-D EE delta positions. The dynamics model is a simple
-    integrator: next_pos = current_pos + action (the PD controller tracks).
-    """
+class ReachMPPI(MPPIBase):
+    """MPPI controller for reaching a Cartesian goal position."""
 
-    def __init__(
-        self,
-        goal_xyz: np.ndarray,
-        horizon: int = 8,
-        num_samples: int = 256,
-        noise_std: float = 0.02,
-        lam: float = 0.05,
-        cost_goal_weight: float = 1.0,
-        cost_control_weight: float = 0.01,
-    ):
+    def __init__(self, goal_xyz: np.ndarray, **kwargs):
+        kwargs.setdefault("horizon", 8)
+        kwargs.setdefault("num_samples", 256)
+        kwargs.setdefault("noise_std", 0.02)
+        kwargs.setdefault("lam", 0.05)
+        super().__init__(action_dim=3, **kwargs)
         self.goal_xyz = goal_xyz.copy()
-        self.horizon = horizon
-        self.K = num_samples
-        self.noise_std = noise_std
-        self.lam = lam
-        self.w_goal = cost_goal_weight
-        self.w_ctrl = cost_control_weight
 
-        # Nominal action sequence: (H, 3) -- initialised to zeros
-        self.nominal = np.zeros((horizon, 3), dtype=np.float32)
-
-    def _rollout_costs(self, ee_pos: np.ndarray, action_seqs: np.ndarray) -> np.ndarray:
-        """
-        Simple forward model: pos_{t+1} = pos_t + action_t.
-        Returns cost array of shape (K,).
-        """
+    def rollout_costs(self, state: dict, action_seqs: np.ndarray) -> np.ndarray:
         K, H, _ = action_seqs.shape
-        pos = np.broadcast_to(ee_pos, (K, 3)).copy()  # (K, 3)
+        pos = np.broadcast_to(state["ee_pos"], (K, 3)).copy()
         costs = np.zeros(K, dtype=np.float32)
 
         for t in range(H):
             pos = pos + action_seqs[:, t, :]
-            dist = np.linalg.norm(pos - self.goal_xyz, axis=1)
-            ctrl = np.sum(action_seqs[:, t, :] ** 2, axis=1)
-            costs += self.w_goal * dist + self.w_ctrl * ctrl
+            costs += np.linalg.norm(pos - self.goal_xyz, axis=1)
+            costs += 0.01 * np.sum(action_seqs[:, t, :] ** 2, axis=1)
 
-        # Terminal cost: heavier penalty on final distance
-        final_dist = np.linalg.norm(pos - self.goal_xyz, axis=1)
-        costs += self.w_goal * 5.0 * final_dist
-
+        # Terminal cost
+        costs += 5.0 * np.linalg.norm(pos - self.goal_xyz, axis=1)
         return costs
-
-    def get_action(self, ee_pos: np.ndarray) -> np.ndarray:
-        """
-        Run one MPPI step: sample, evaluate, reweight, return first action.
-        """
-        noise = np.random.randn(self.K, self.horizon, 3).astype(np.float32) * self.noise_std
-        action_seqs = self.nominal[None, :, :] + noise  # (K, H, 3)
-
-        costs = self._rollout_costs(ee_pos, action_seqs)
-
-        # MPPI weighting: exp(-cost / lambda)
-        costs_shifted = costs - np.min(costs)
-        weights = np.exp(-costs_shifted / self.lam)
-        weights /= np.sum(weights) + 1e-10
-
-        # Weighted average -> updated nominal
-        self.nominal = np.einsum("k,kha->ha", weights, action_seqs)
-
-        action = self.nominal[0].copy()
-
-        # Shift nominal forward (warm-start next step), pad last with zeros
-        self.nominal = np.roll(self.nominal, -1, axis=0)
-        self.nominal[-1] = 0.0
-
-        return action
-
-
-def _get_ee_pos(obs: dict) -> np.ndarray:
-    """Extract EE position from either raw env obs or planning wrapper obs."""
-    if "extra" in obs:
-        # Raw env obs: obs["extra"]["ee_pos"] or obs["extra"]["tcp_pose"]
-        extra = obs["extra"]
-        if "ee_pos" in extra:
-            return np.asarray(extra["ee_pos"], dtype=np.float32).reshape(-1)[:3]
-        return np.asarray(extra["tcp_pose"], dtype=np.float32).reshape(-1)[:3]
-    # Planning wrapper obs: top-level "tcp_pose"
-    return np.asarray(obs["tcp_pose"], dtype=np.float32).reshape(-1)[:3]
 
 
 # ---------------------------------------------------------------------------
@@ -128,54 +59,32 @@ def execute(
     obs: dict,
     goal_xyz: np.ndarray,
     max_steps: int = 200,
-    horizon: int = 8,
-    num_samples: int = 256,
-    noise_std: float = 0.02,
-    lam: float = 0.05,
     success_threshold: float = 0.05,
     render: bool = False,
     **kwargs,
 ) -> tuple[bool, dict]:
     """
-    Move the EE to goal_xyz on an already-running env using MPPI.
-
-    Returns (success, latest_obs). Success is True if the EE lands within
-    5 cm of the target.
+    Move the EE to goal_xyz using MPPI.
+    Returns (success, latest_obs).
     """
-    controller = MPPI(
-        goal_xyz=goal_xyz,
-        horizon=horizon,
-        num_samples=num_samples,
-        noise_std=noise_std,
-        lam=lam,
-    )
-
+    controller = ReachMPPI(goal_xyz=goal_xyz, **kwargs)
     act_dim = env.action_space.shape[0]
     current_obs = obs
 
-    for step in range(max_steps):
-        ee_pos = _get_ee_pos(current_obs)
-
-        dist = np.linalg.norm(ee_pos - goal_xyz)
-        if dist < success_threshold:
+    for _ in range(max_steps):
+        ee_pos = get_ee_pos(current_obs)
+        if np.linalg.norm(ee_pos - goal_xyz) < success_threshold:
             return True, current_obs
 
-        delta_pos = controller.get_action(ee_pos)
-
-        # pd_ee_delta_pose: [dx, dy, dz, droll, dpitch, dyaw, gripper]
+        delta = controller.get_action({"ee_pos": ee_pos})
         action = np.zeros(act_dim, dtype=np.float32)
-        action[:3] = delta_pos
-
-        action_t = torch.tensor(action, dtype=torch.float32).unsqueeze(0)
-        current_obs, _, term, trunc, _ = env.step(action_t)
-        if render:
-            env.render()
-        if np.asarray(term).any() or np.asarray(trunc).any():
+        action[:3] = delta
+        current_obs, done = step_env(env, action, render)
+        if done:
             break
 
-    final_ee = _get_ee_pos(current_obs)
-    success = bool(np.linalg.norm(final_ee - goal_xyz) < success_threshold)
-    return success, current_obs
+    final_ee = get_ee_pos(current_obs)
+    return bool(np.linalg.norm(final_ee - goal_xyz) < success_threshold), current_obs
 
 
 # ---------------------------------------------------------------------------

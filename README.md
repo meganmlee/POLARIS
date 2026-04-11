@@ -19,9 +19,9 @@ Each skill has multiple backends sharing the same environment, so methods are di
 | Skill | Classical | Learned (PPO) | Environment |
 |---|---|---|---|
 | Reach | MPPI (`reach_mpc.py`) | PPO (`reach_ppo.py`) | `Reach-WithObstacles-v1` |
-| Push Cube | RRT (`push_cube_rrt.py`) | PPO (`push_cube_ppo.py`) | `PushCube-WithObstacles-v1` |
-| Pick | — | — | — |
-| Place | — | — | — |
+| Push Cube | MPPI (`push_cube_mpc.py`) | PPO (`push_cube_ppo.py`) | `PushCube-WithObstacles-v1` |
+| Pick | MPPI (`pick_cube_mpc.py`) | PPO (`pick_cube_ppo.py`) | `PickSkillEnv` |
+| Place | MPPI (`place_cube_mpc.py`) | PPO (`place_cube_ppo.py`) | `PlaceSkillEnv` |
 | Push T | — | — | `PushT-WithObstacles-v1` |
 
 ## Project Structure
@@ -33,9 +33,16 @@ POLARIS/
 │   ├── shelf_retrieve_v1.py       # Object retrieval from shelf
 │   └── shelf_scene_builder.py
 ├── skills/                        # Skill backends
+│   ├── mpc_base.py                # Shared MPPI infrastructure
 │   ├── push_cube/
 │   │   ├── push_cube_ppo.py       # Learned: PPO policy
-│   │   └── push_cube_rrt.py       # Classical: RRT planner
+│   │   └── push_cube_mpc.py       # Classical: MPPI controller
+│   ├── pick/
+│   │   ├── pick_cube_ppo.py       # Learned: PPO policy
+│   │   └── pick_cube_mpc.py       # Classical: MPPI controller
+│   ├── place/
+│   │   ├── place_cube_ppo.py      # Learned: PPO policy
+│   │   └── place_cube_mpc.py      # Classical: MPPI controller
 │   └── reach/
 │       ├── reach_ppo.py           # Learned: PPO policy
 │       └── reach_mpc.py           # Classical: MPPI controller
@@ -44,7 +51,9 @@ POLARIS/
 │   ├── pusht_obstacles_demo.py
 │   ├── reach_demo.py              # Proportional controller baseline
 │   ├── reach_ppo_demo.py
-│   └── reach_mpc_demo.py          # MPPI controller demo
+│   ├── reach_mpc_demo.py          # MPPI reach demo
+│   ├── pick_cube_mpc_demo.py      # MPPI pick demo
+│   └── place_cube_mpc_demo.py     # MPPI place demo
 ├── high_level_planner/            # LLM-based subgoal generation
 │   ├── llm_plan.py                # PDDL problem builder + LLM/symbolic/BFS planner
 │   ├── env_subgoal_runner.py      # Live env or dummy state → subgoals
@@ -158,7 +167,9 @@ No training required.
 ```bash
 python skills/reach/reach_mpc.py
 python skills/reach/reach_mpc.py --num_episodes 20 --seed 42
-python skills/push_cube/push_cube_rrt.py
+python skills/push_cube/push_cube_mpc.py
+python skills/pick/pick_cube_mpc.py
+python skills/place/place_cube_mpc.py
 ```
 
 ## Running Demos
@@ -168,6 +179,12 @@ python skills/push_cube/push_cube_rrt.py
 python examples/reach_demo.py        # proportional controller baseline
 python examples/reach_ppo_demo.py --checkpoint checkpoints/<run>/final_ckpt.pt  # PPO policy
 python examples/reach_mpc_demo.py    # MPPI controller
+
+# Pick
+python examples/pick_cube_mpc_demo.py    # MPPI pick controller
+
+# Place
+python examples/place_cube_mpc_demo.py   # MPPI place controller
 python examples/reach_ppo_demo.py --checkpoint checkpoints/<run>/final_ckpt.pt --seed 10 # change seed randomization (default 5)
 
 # PushCube
@@ -236,7 +253,7 @@ Reads the current environment state (object, goal, robot hand, obstacles) and fe
 
 Ties the planner and skill library into a full execution loop: plan → dispatch skill → detect failure → re-plan.
 
-**Supported skills:** `reach` (MPPI or PPO), `pick` (PPO), `place` (PPO), `push_cube` (PPO)
+**Supported skills:** `reach` (MPPI or PPO), `pick` (MPPI or PPO), `place` (MPPI or PPO), `push_cube` (MPPI or PPO)
 
 ```bash
 # PPO reach skill (checkpoint required)
