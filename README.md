@@ -1,6 +1,6 @@
 # POLARIS
 
-POLARIS (Policy Assignment for Robust Intent-Driven Skill Execution) is a robot manipulation framework that combines LLM-based task decomposition with an adaptive skill library. Long-horizon tasks are broken into subgoals by an LLM, which compresses the simulation state into a PDDL representation of object states and constraints. For each subgoal, a **Policy Assignment** module selects the most efficient execution method — classical motion planning (RRT*) or a learned RL policy (PPO) — and retries with reassignment on failure.
+POLARIS (Policy Assignment for Robust Intent-Driven Skill Execution) is a robot manipulation framework that combines LLM-based task decomposition with an adaptive skill library. Long-horizon tasks are broken into subgoals by an LLM, which compresses the simulation state into a PDDL representation of object states and constraints. For each subgoal, a **Policy Assignment** module selects the most efficient execution method — classical motion planning (MPPI) or a learned RL policy (PPO) — and retries with reassignment on failure.
 
 ## System Components
 
@@ -9,7 +9,7 @@ POLARIS (Policy Assignment for Robust Intent-Driven Skill Execution) is a robot 
 - The simulation state is compressed into a PDDL-style representation of object states and constraints, which is passed as context to the LLM
 
 ### Policy Assignment
-- For each subgoal, evaluates **classical motion planning** (RRT*, Cartesian) vs **learned RL policies** (PPO) on efficiency and success rate
+- For each subgoal, evaluates **classical motion planning** (MPPI, Cartesian) vs **learned RL policies** (PPO) on efficiency and success rate
 - On failure, reassigns the subgoal to an alternative method from the skill library
 - The skill library is designed to grow — new classical or learned backends can be added per skill
 
@@ -18,7 +18,7 @@ Each skill has multiple backends sharing the same environment, so methods are di
 
 | Skill | Classical | Learned (PPO) | Environment |
 |---|---|---|---|
-| Reach | RRT* (`reach_rrt.py`) | PPO (`reach_ppo.py`) | `Reach-WithObstacles-v1` |
+| Reach | MPPI (`reach_mpc.py`) | PPO (`reach_ppo.py`) | `Reach-WithObstacles-v1` |
 | Push Cube | RRT (`push_cube_rrt.py`) | PPO (`push_cube_ppo.py`) | `PushCube-WithObstacles-v1` |
 | Pick | — | — | — |
 | Place | — | — | — |
@@ -38,13 +38,13 @@ POLARIS/
 │   │   └── push_cube_rrt.py       # Classical: RRT planner
 │   └── reach/
 │       ├── reach_ppo.py           # Learned: PPO policy
-│       └── reach_rrt.py           # Classical: RRT* in joint space
+│       └── reach_mpc.py           # Classical: MPPI controller
 ├── examples/                      # Demos and visualization
 │   ├── push_cube_ppo_demo.py
 │   ├── pusht_obstacles_demo.py
 │   ├── reach_demo.py              # Proportional controller baseline
 │   ├── reach_ppo_demo.py
-│   └── reach_rrt_demo.py
+│   └── reach_mpc_demo.py          # MPPI controller demo
 ├── high_level_planner/            # LLM-based subgoal generation
 │   ├── llm_plan.py                # PDDL problem builder + LLM/symbolic/BFS planner
 │   ├── env_subgoal_runner.py      # Live env or dummy state → subgoals
@@ -156,8 +156,8 @@ python push_cube_ppo.py \
 No training required.
 
 ```bash
-python skills/reach/reach_rrt.py
-python skills/reach/reach_rrt.py --num_episodes 20 --seed 42
+python skills/reach/reach_mpc.py
+python skills/reach/reach_mpc.py --num_episodes 20 --seed 42
 python skills/push_cube/push_cube_rrt.py
 ```
 
@@ -167,7 +167,7 @@ python skills/push_cube/push_cube_rrt.py
 # Reach
 python examples/reach_demo.py        # proportional controller baseline
 python examples/reach_ppo_demo.py --checkpoint checkpoints/<run>/final_ckpt.pt  # PPO policy
-python examples/reach_rrt_demo.py    # RRT* planner
+python examples/reach_mpc_demo.py    # MPPI controller
 python examples/reach_ppo_demo.py --checkpoint checkpoints/<run>/final_ckpt.pt --seed 10 # change seed randomization (default 5)
 
 # PushCube
@@ -236,17 +236,17 @@ Reads the current environment state (object, goal, robot hand, obstacles) and fe
 
 Ties the planner and skill library into a full execution loop: plan → dispatch skill → detect failure → re-plan.
 
-**Supported skills:** `reach` (RRT* or PPO), `pick` (PPO), `place` (PPO), `push_cube` (PPO)
+**Supported skills:** `reach` (MPPI or PPO), `pick` (PPO), `place` (PPO), `push_cube` (PPO)
 
 ```bash
 # PPO reach skill (checkpoint required)
 python high_level_planner/executor.py --seed 42 --reach-checkpoint Reach-WithObstacles-v1__1__<timestamp>
 
-# RRT reach skill (no checkpoint needed)
-python high_level_planner/executor.py --seed 42 --skill rrt
+# MPPI reach skill (no checkpoint needed)
+python high_level_planner/executor.py --seed 42 --skill mpc
 
-# Offline with RRT, limit replans
-python high_level_planner/executor.py --seed 3 --max_replans 5 --offline --skill rrt
+# Offline with MPPI, limit replans
+python high_level_planner/executor.py --seed 3 --max_replans 5 --offline --skill mpc
 
 # Full multi-skill run
 python high_level_planner/executor.py --seed 0 \
