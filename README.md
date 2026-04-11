@@ -269,9 +269,12 @@ python high_level_planner/executor.py --seed 3 --max_replans 5 --offline --skill
 python high_level_planner/executor.py --seed 0 \
     --reach-checkpoint Reach-WithObstacles-v1__1__<ts> \
     --push-cube-checkpoint PushCube-WithObstacles-v1__1__<ts>
+
+# Full multi-skill run with default checkpoints for all PPO skills
+python high_level_planner/executor.py
 ```
 
-Checkpoint args accept either a full path or a run name under `checkpoints/` (e.g. `Reach-WithObstacles-v1__1__1773025568` expands to `checkpoints/.../final_ckpt.pt`).
+Checkpoint args accept either a full path or a run name under `checkpoints/` (e.g. `Reach-WithObstacles-v1__1__1773025568` expands to `checkpoints/.../final_ckpt.pt`). By default, all checkpoints under `checkpoints/` with short names (e.g. PickSkill) without timestamps will be used.
 
 ### `domain_pusht.pddl` — PDDL Domain
 

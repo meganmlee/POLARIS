@@ -246,12 +246,12 @@ if __name__ == "__main__":
     ap.add_argument("--render",              action="store_true", help="Open a viewer window")
     ap.add_argument("--model",               default="gemini-2.5-flash")
     ap.add_argument("--skill",               default="ppo", choices=["mpc", "ppo"])
-    ap.add_argument("--reach-checkpoint",    default=None, dest="reach_checkpoint", help="Reach PPO checkpoint (required for --skill ppo)")
-    ap.add_argument("--pick-checkpoint",     default=None, dest="pick_checkpoint",
+    ap.add_argument("--reach-checkpoint",    default="Reach", dest="reach_checkpoint", help="Reach PPO checkpoint (required for --skill ppo)")
+    ap.add_argument("--pick-checkpoint",     default="PickSkill", dest="pick_checkpoint",
                     help="Pick skill PPO checkpoint")
-    ap.add_argument("--place-checkpoint",    default=None, dest="place_checkpoint",
+    ap.add_argument("--place-checkpoint",    default="PlaceSkill", dest="place_checkpoint",
                     help="Place skill PPO checkpoint")
-    ap.add_argument("--push-cube-checkpoint", default=None, dest="push_cube_checkpoint",
+    ap.add_argument("--push-cube-checkpoint", default="PushCube", dest="push_cube_checkpoint",
                     help="Push-cube skill PPO checkpoint")
     args = ap.parse_args()
     if args.skill == "ppo" and args.reach_checkpoint is None:
