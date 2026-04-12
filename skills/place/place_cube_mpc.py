@@ -42,8 +42,9 @@ class PlaceMPPI(MPPIBase):
     def __init__(self, **kwargs):
         kwargs.setdefault("horizon", 8)
         kwargs.setdefault("num_samples", 256)
-        kwargs.setdefault("noise_std", 0.5)
-        kwargs.setdefault("lam", 0.03)
+        kwargs.setdefault("noise_std", 0.2)
+        kwargs.setdefault("lam", 0.05)
+        kwargs.setdefault("action_clip", 0.5)
         super().__init__(action_dim=3, **kwargs)
 
     def rollout_costs(self, state: dict, action_seqs: np.ndarray) -> np.ndarray:
@@ -219,7 +220,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps",    type=int,   default=200)
     parser.add_argument("--horizon",      type=int,   default=8)
     parser.add_argument("--num_samples",  type=int,   default=256)
-    parser.add_argument("--noise_std",    type=float, default=0.5)
-    parser.add_argument("--lam",          type=float, default=0.03)
+    parser.add_argument("--noise_std",    type=float, default=0.2)
+    parser.add_argument("--lam",          type=float, default=0.05)
     args = parser.parse_args()
     run_eval(args)

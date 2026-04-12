@@ -27,14 +27,24 @@ import envs  # registers PushCube-WithObstacles-v1
 from mpc_base import MPPIBase, get_ee_pos, step_env, EE_POS_ACTION_SCALE
 
 
+# Staging: line EE up behind the cube (opposite goal), approaching from above
+# to avoid knocking the cube while moving into position.
+STAGE_OFFSET = 0.05      # m behind cube (along -push_dir)
+STAGE_HIGH_Z = 0.15      # travel height while repositioning in XY
+PUSH_Z = 0.03            # push at cube centre height (cube half_size ~0.02)
+STAGE_XY_ALIGN = 0.015   # m — switch from hover to descend when XY aligned
+STAGE_ALIGN_DIST = 0.02  # m — switch to push when fully at stage target
+
+
 class PushCubeMPPI(MPPIBase):
     """MPPI controller for pushing a cube to a goal XY position."""
 
     def __init__(self, goal_xyz: np.ndarray, contact_radius: float = 0.04, **kwargs):
         kwargs.setdefault("horizon", 10)
         kwargs.setdefault("num_samples", 512)
-        kwargs.setdefault("noise_std", 0.2)
-        kwargs.setdefault("lam", 0.02)
+        kwargs.setdefault("noise_std", 0.4)
+        kwargs.setdefault("lam", 0.04)
+        kwargs.setdefault("action_clip", 0.5)
         super().__init__(action_dim=3, **kwargs)
         self.goal_xy = goal_xyz[:2].copy()
         self.contact_radius = contact_radius
@@ -43,6 +53,7 @@ class PushCubeMPPI(MPPIBase):
         K, H, _ = action_seqs.shape
         ee = np.broadcast_to(state["ee_pos"], (K, 3)).copy()
         cube_xy = np.broadcast_to(state["cube_pos"][:2], (K, 2)).copy()
+        target_z = float(state["target"][2])
         costs = np.zeros(K, dtype=np.float32)
 
         scaled = action_seqs * EE_POS_ACTION_SCALE
@@ -64,8 +75,9 @@ class PushCubeMPPI(MPPIBase):
 
             cube_to_goal = np.linalg.norm(cube_xy - self.goal_xy, axis=1)
             ee_to_cube = np.linalg.norm(ee_xy - cube_xy, axis=1)
+            z_dev = (ee[:, 2] - target_z) ** 2
             ctrl = np.sum(action_seqs[:, t, :] ** 2, axis=1)
-            costs += 2.0 * cube_to_goal + 0.5 * ee_to_cube + 0.01 * ctrl
+            costs += 2.0 * cube_to_goal + 0.5 * ee_to_cube + 5.0 * z_dev + 0.01 * ctrl
 
         costs += 10.0 * np.linalg.norm(cube_xy - self.goal_xy, axis=1)
         return costs
@@ -95,6 +107,8 @@ def execute(
     act_dim = env.action_space.shape[0]
     current_obs = obs
 
+    phase = "hover"  # hover -> descend -> push
+
     for _ in range(max_steps):
         ee_pos = get_ee_pos(current_obs)
         cube_pos = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
@@ -102,7 +116,33 @@ def execute(
         if float(np.linalg.norm(cube_pos[:2] - goal_xyz[:2])) < success_threshold:
             return True, current_obs
 
-        delta = controller.get_action({"ee_pos": ee_pos, "cube_pos": cube_pos})
+        push_vec = goal_xyz[:2] - cube_pos[:2]
+        push_dir = push_vec / (np.linalg.norm(push_vec) + 1e-6)
+        stage_xy = cube_pos[:2] - push_dir * STAGE_OFFSET
+
+        if phase == "hover":
+            # Travel at safe height to staging XY (avoids knocking the cube).
+            target = np.array([stage_xy[0], stage_xy[1], STAGE_HIGH_Z], dtype=np.float32)
+            diff = target - ee_pos
+            delta = np.clip(diff / EE_POS_ACTION_SCALE, -1.0, 1.0).astype(np.float32)
+
+            if float(np.linalg.norm(ee_pos[:2] - stage_xy)) < STAGE_XY_ALIGN:
+                phase = "descend"
+
+        elif phase == "descend":
+            # Drop down to push height at the staging XY.
+            target = np.array([stage_xy[0], stage_xy[1], PUSH_Z], dtype=np.float32)
+            diff = target - ee_pos
+            delta = np.clip(diff / EE_POS_ACTION_SCALE, -1.0, 1.0).astype(np.float32)
+
+            if float(np.linalg.norm(ee_pos - target)) < STAGE_ALIGN_DIST:
+                phase = "push"
+                controller.nominal[:] = 0.0
+
+        else:  # push — drive EE toward goal at push height; cube rides along in contact
+            target = np.array([goal_xyz[0], goal_xyz[1], PUSH_Z], dtype=np.float32)
+            delta = controller.get_action({"ee_pos": ee_pos, "cube_pos": cube_pos, "target": target})
+
         action = np.zeros(act_dim, dtype=np.float32)
         action[:3] = delta
         current_obs, done = step_env(env, action, render)
@@ -180,7 +220,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps",    type=int,   default=200)
     parser.add_argument("--horizon",      type=int,   default=10)
     parser.add_argument("--num_samples",  type=int,   default=512)
-    parser.add_argument("--noise_std",    type=float, default=0.2)
-    parser.add_argument("--lam",          type=float, default=0.02)
+    parser.add_argument("--noise_std",    type=float, default=0.4)
+    parser.add_argument("--lam",          type=float, default=0.04)
     args = parser.parse_args()
     run_eval(args)
