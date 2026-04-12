@@ -40,6 +40,30 @@ from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs
+from planning_wrapper.wrappers.maniskill_planning import (
+    unwrap_maniskill_root,
+    tcp_manipulability,
+)
+
+
+def _append_tcp_manipulability(eval_envs, samples: list, warn_once: list) -> None:
+    try:
+        root = unwrap_maniskill_root(eval_envs)
+        w = tcp_manipulability(root.agent.robot)
+        samples.extend(float(x) for x in np.asarray(w).reshape(-1))
+    except Exception as ex:
+        if not warn_once[0]:
+            print(f"  [manipulability] skipped: {ex}")
+            warn_once[0] = True
+
+
+def _eval_obs_to_device(obs: Union[torch.Tensor, Dict[str, Any]], dev: torch.device):
+    """Eval uses physx_cpu while the policy may live on CUDA — align observation device."""
+    if isinstance(obs, dict):
+        return {k: v.to(dev) if torch.is_tensor(v) else v for k, v in obs.items()}
+    if torch.is_tensor(obs):
+        return obs.to(dev)
+    return obs
 
 
 @dataclass
@@ -149,12 +173,17 @@ if __name__ == "__main__":
 
     env_kwargs = dict(obs_mode=args.obs_mode, control_mode=args.control_mode,
                       render_mode="rgb_array", sim_backend="physx_cuda")
+    eval_env_kwargs = dict(env_kwargs)
+    eval_env_kwargs["sim_backend"] = "physx_cpu"
+    # ManiSkill: CPU backend cannot run multiple parallel envs in one process (must use AsyncVectorEnv).
+    # We use physx_cpu for eval so Pinocchio/manipulability works → force a single eval env.
+    eval_num_envs = 1 if eval_env_kwargs.get("sim_backend") == "physx_cpu" else args.num_eval_envs
 
     envs = gym.make(args.env_id,
                     num_envs=args.num_envs if not args.evaluate else 1,
                     reconfiguration_freq=args.reconfiguration_freq, **env_kwargs)
-    eval_envs = gym.make(args.env_id, num_envs=args.num_eval_envs,
-                         reconfiguration_freq=args.eval_reconfiguration_freq, **env_kwargs)
+    eval_envs = gym.make(args.env_id, num_envs=eval_num_envs,
+                         reconfiguration_freq=args.eval_reconfiguration_freq, **eval_env_kwargs)
 
     if isinstance(envs.action_space, gym.spaces.Dict):
         envs      = FlattenActionSpaceWrapper(envs)
@@ -181,7 +210,7 @@ if __name__ == "__main__":
 
     envs = ManiSkillVectorEnv(envs,      args.num_envs,
                                    ignore_terminations=not args.partial_reset,      record_metrics=True)
-    eval_envs = ManiSkillVectorEnv(eval_envs, args.num_eval_envs,
+    eval_envs = ManiSkillVectorEnv(eval_envs, eval_num_envs,
                                    ignore_terminations=not args.eval_partial_reset, record_metrics=True)
     assert isinstance(envs.single_action_space, gym.spaces.Box)
 
@@ -193,9 +222,17 @@ if __name__ == "__main__":
 
     if args.evaluate:
         print("=== Evaluation mode ===")
+        if eval_num_envs != args.num_eval_envs:
+            print(
+                f"  (eval num_envs={eval_num_envs} — CPU sim requires 1; "
+                f"ignoring --num-eval-envs {args.num_eval_envs})"
+            )
         eval_obs, _ = eval_envs.reset()
         eval_metrics = defaultdict(list)
+        manip_samples: list[float] = []
+        manip_warn = [False]
         for _ in range(args.num_eval_steps):
+            eval_obs = _eval_obs_to_device(eval_obs, device)
             with torch.no_grad():
                 eval_obs, _, _, _, eval_infos = eval_envs.step(
                     agent.get_action(eval_obs, deterministic=True))
@@ -203,8 +240,14 @@ if __name__ == "__main__":
                     mask = eval_infos["_final_info"]
                     for k, v in eval_infos["final_info"]["episode"].items():
                         eval_metrics[k].append(v[mask].float())
+            _append_tcp_manipulability(eval_envs, manip_samples, manip_warn)
         for k, v in eval_metrics.items():
             print(f"  {k}: {torch.stack(v).float().mean():.4f}")
+        if manip_samples:
+            print(
+                f"  mean manipulability (all eval envs × steps): "
+                f"{float(np.mean(manip_samples)):.6f}  (n={len(manip_samples)})"
+            )
         envs.close(); eval_envs.close()
         exit()
 
@@ -348,7 +391,10 @@ if __name__ == "__main__":
             agent.eval()
             eval_obs, _ = eval_envs.reset()
             eval_metrics = defaultdict(list)
+            manip_samples: list[float] = []
+            manip_warn = [False]
             for _ in range(args.num_eval_steps):
+                eval_obs = _eval_obs_to_device(eval_obs, device)
                 with torch.no_grad():
                     eval_obs, _, _, _, eval_infos = eval_envs.step(
                         agent.get_action(eval_obs, deterministic=True))
@@ -356,10 +402,15 @@ if __name__ == "__main__":
                         mask = eval_infos["_final_info"]
                         for k, v in eval_infos["final_info"]["episode"].items():
                             eval_metrics[k].append(v[mask].float())
+                _append_tcp_manipulability(eval_envs, manip_samples, manip_warn)
             for k, v in eval_metrics.items():
                 mean = torch.stack(v).float().mean()
                 writer.add_scalar(f"eval/{k}", mean, global_step)
                 print(f"    eval_{k}={mean:.4f}")
+            if manip_samples:
+                mm = float(np.mean(manip_samples))
+                writer.add_scalar("eval/mean_manipulability", mm, global_step)
+                print(f"    eval_mean_manipulability={mm:.6f}")
 
         if args.save_model and iteration % args.eval_freq == 1:
             os.makedirs(f"runs/{run_name}", exist_ok=True)

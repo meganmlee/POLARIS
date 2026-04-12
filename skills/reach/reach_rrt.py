@@ -30,6 +30,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # registers MoveGoal-WithObstacles-v1
+from planning_wrapper.wrappers.maniskill_planning import tcp_manipulability
 
 
 JOINT_LOWER = np.array([-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973])
@@ -251,6 +252,7 @@ def run_eval(args):
     root = env.unwrapped
 
     successes, final_dists, plan_times = [], [], []
+    episode_manip_means: list[float] = []
 
     for ep in range(args.num_episodes):
         print(f"\n=== Episode {ep + 1}/{args.num_episodes} ===")
@@ -285,9 +287,15 @@ def run_eval(args):
         gripper_pad = np.zeros(act_dim - 7, dtype=np.float32) + 0.04
 
         success, final_dist = False, float("inf")
+        manip_vals: list[float] = []
         for q in traj:
             action = torch.tensor(np.concatenate([q, gripper_pad]), dtype=torch.float32).unsqueeze(0)
             obs, _, term, trunc, info = env.step(action)
+            try:
+                w = tcp_manipulability(root.agent.robot)
+                manip_vals.append(float(np.mean(w)))
+            except Exception:
+                pass
 
             dist = float(np.asarray(info.get("dist_to_goal", [float("inf")])).reshape(-1)[0])
             suc  = bool(np.asarray(info.get("success",      [False]       )).reshape(-1)[0])
@@ -301,7 +309,15 @@ def run_eval(args):
 
         successes.append(success)
         final_dists.append(final_dist)
-        print(f"  {'SUCCESS' if success else 'FAIL'}  dist={final_dist * 100:.1f} cm")
+        if manip_vals:
+            mmean = float(np.mean(manip_vals))
+            episode_manip_means.append(mmean)
+            print(
+                f"  {'SUCCESS' if success else 'FAIL'}  dist={final_dist * 100:.1f} cm"
+                f"  | mean manipulability (traj)={mmean:.6f}  min={np.min(manip_vals):.6f}"
+            )
+        else:
+            print(f"  {'SUCCESS' if success else 'FAIL'}  dist={final_dist * 100:.1f} cm")
 
     env.close()
 
@@ -310,6 +326,11 @@ def run_eval(args):
     print(f"Success rate   : {np.mean(successes) * 100:.1f}%")
     print(f"Mean final dist: {np.mean(valid) * 100:.1f} cm" if valid else "Mean final dist: N/A")
     print(f"Mean plan time : {np.mean(plan_times):.2f}s")
+    if episode_manip_means:
+        print(
+            f"Mean manipulability (avg of per-episode trajectory means): "
+            f"{float(np.mean(episode_manip_means)):.6f}"
+        )
     print("=" * 50)
 
 
