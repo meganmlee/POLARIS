@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # registers PushCube-WithObstacles-v1
 
-from mpc_base import MPPIBase, get_ee_pos, step_env
+from mpc_base import MPPIBase, get_ee_pos, step_env, EE_POS_ACTION_SCALE
 
 
 class PushCubeMPPI(MPPIBase):
@@ -33,7 +33,7 @@ class PushCubeMPPI(MPPIBase):
     def __init__(self, goal_xyz: np.ndarray, contact_radius: float = 0.04, **kwargs):
         kwargs.setdefault("horizon", 10)
         kwargs.setdefault("num_samples", 512)
-        kwargs.setdefault("noise_std", 0.015)
+        kwargs.setdefault("noise_std", 0.2)
         kwargs.setdefault("lam", 0.02)
         super().__init__(action_dim=3, **kwargs)
         self.goal_xy = goal_xyz[:2].copy()
@@ -45,14 +45,15 @@ class PushCubeMPPI(MPPIBase):
         cube_xy = np.broadcast_to(state["cube_pos"][:2], (K, 2)).copy()
         costs = np.zeros(K, dtype=np.float32)
 
+        scaled = action_seqs * EE_POS_ACTION_SCALE
         for t in range(H):
-            ee = ee + action_seqs[:, t, :]
+            ee = ee + scaled[:, t, :]
             ee_xy = ee[:, :2]
 
             dist_to_cube = np.linalg.norm(ee_xy - cube_xy, axis=1)
             in_contact = dist_to_cube < self.contact_radius
 
-            push_dir = action_seqs[:, t, :2]
+            push_dir = scaled[:, t, :2]
             push_mag = np.linalg.norm(push_dir, axis=1, keepdims=True)
             push_dir_norm = np.where(push_mag > 1e-6, push_dir / push_mag, 0.0)
             cube_xy = np.where(
@@ -179,7 +180,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps",    type=int,   default=200)
     parser.add_argument("--horizon",      type=int,   default=10)
     parser.add_argument("--num_samples",  type=int,   default=512)
-    parser.add_argument("--noise_std",    type=float, default=0.015)
+    parser.add_argument("--noise_std",    type=float, default=0.2)
     parser.add_argument("--lam",          type=float, default=0.02)
     args = parser.parse_args()
     run_eval(args)

@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # registers Reach-WithObstacles-v1
 
-from mpc_base import MPPIBase, get_ee_pos, step_env
+from mpc_base import MPPIBase, get_ee_pos, step_env, EE_POS_ACTION_SCALE
 
 
 class ReachMPPI(MPPIBase):
@@ -30,7 +30,7 @@ class ReachMPPI(MPPIBase):
     def __init__(self, goal_xyz: np.ndarray, **kwargs):
         kwargs.setdefault("horizon", 8)
         kwargs.setdefault("num_samples", 256)
-        kwargs.setdefault("noise_std", 0.02)
+        kwargs.setdefault("noise_std", 0.5)
         kwargs.setdefault("lam", 0.05)
         super().__init__(action_dim=3, **kwargs)
         self.goal_xyz = goal_xyz.copy()
@@ -40,8 +40,9 @@ class ReachMPPI(MPPIBase):
         pos = np.broadcast_to(state["ee_pos"], (K, 3)).copy()
         costs = np.zeros(K, dtype=np.float32)
 
+        scaled = action_seqs * EE_POS_ACTION_SCALE
         for t in range(H):
-            pos = pos + action_seqs[:, t, :]
+            pos = pos + scaled[:, t, :]
             costs += np.linalg.norm(pos - self.goal_xyz, axis=1)
             costs += 0.01 * np.sum(action_seqs[:, t, :] ** 2, axis=1)
 
@@ -149,7 +150,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps",    type=int,   default=200)
     parser.add_argument("--horizon",      type=int,   default=8)
     parser.add_argument("--num_samples",  type=int,   default=256)
-    parser.add_argument("--noise_std",    type=float, default=0.02)
+    parser.add_argument("--noise_std",    type=float, default=0.5)
     parser.add_argument("--lam",          type=float, default=0.05)
     args = parser.parse_args()
     run_eval(args)

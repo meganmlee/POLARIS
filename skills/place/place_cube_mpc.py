@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # registers PlaceSkillEnv
 
-from mpc_base import MPPIBase, get_ee_pos, step_env
+from mpc_base import MPPIBase, get_ee_pos, step_env, EE_POS_ACTION_SCALE
 
 
 PLACE_THRESHOLD = 0.05
@@ -42,7 +42,7 @@ class PlaceMPPI(MPPIBase):
     def __init__(self, **kwargs):
         kwargs.setdefault("horizon", 8)
         kwargs.setdefault("num_samples", 256)
-        kwargs.setdefault("noise_std", 0.015)
+        kwargs.setdefault("noise_std", 0.5)
         kwargs.setdefault("lam", 0.03)
         super().__init__(action_dim=3, **kwargs)
 
@@ -52,8 +52,9 @@ class PlaceMPPI(MPPIBase):
         target = state["target"]
         costs = np.zeros(K, dtype=np.float32)
 
+        scaled = action_seqs * EE_POS_ACTION_SCALE
         for t in range(H):
-            pos = pos + action_seqs[:, t, :]
+            pos = pos + scaled[:, t, :]
             costs += np.linalg.norm(pos - target, axis=1)
             costs += 0.01 * np.sum(action_seqs[:, t, :] ** 2, axis=1)
 
@@ -84,11 +85,6 @@ def execute(
     controller = PlaceMPPI(**kwargs)
     act_dim = env.action_space.shape[0]
     current_obs = obs
-
-    # Bail if not holding the cube
-    if not bool(raw.agent.is_grasping(obstacle).cpu().numpy().any()):
-        print("  [place] not grasping — bail")
-        return False, obs
 
     phase = "carry"  # carry -> lower -> release -> retreat
     release_steps = 0
@@ -223,7 +219,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps",    type=int,   default=200)
     parser.add_argument("--horizon",      type=int,   default=8)
     parser.add_argument("--num_samples",  type=int,   default=256)
-    parser.add_argument("--noise_std",    type=float, default=0.015)
+    parser.add_argument("--noise_std",    type=float, default=0.5)
     parser.add_argument("--lam",          type=float, default=0.03)
     args = parser.parse_args()
     run_eval(args)

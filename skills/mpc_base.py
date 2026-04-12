@@ -13,6 +13,11 @@ from __future__ import annotations
 
 import numpy as np
 
+# Panda pd_ee_delta_pose scales action=1.0 -> 0.1 m of commanded EE delta
+# (pos_lower/pos_upper = ±0.1 in the controller config). Subclasses must
+# multiply actions by this factor when integrating EE position in rollouts.
+EE_POS_ACTION_SCALE = 0.1
+
 
 class MPPIBase:
     """
@@ -76,6 +81,8 @@ class MPPIBase:
             * self.noise_std
         )
         action_seqs = self.nominal[None, :, :] + noise  # (K, H, action_dim)
+        if self.action_clip is not None:
+            action_seqs = np.clip(action_seqs, -self.action_clip, self.action_clip)
 
         costs = self.rollout_costs(state, action_seqs)
 
