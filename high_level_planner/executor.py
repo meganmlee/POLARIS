@@ -45,10 +45,11 @@ sys.path.insert(0, os.path.join(_ROOT, "skills", "reach"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "pick"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "place"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "push_cube"))
+sys.path.insert(0, os.path.join(_ROOT, "skills", "push_o"))
 
 import envs  # noqa: F401 — registers ManiSkill envs
 import gymnasium as gym
-from planning_wrapper.adapters import PushTTaskAdapter
+from planning_wrapper.adapters import PushOTaskAdapter
 from planning_wrapper.wrappers.maniskill_planning import ManiSkillPlanningWrapper
 
 from llm_plan import region_to_xy
@@ -61,6 +62,7 @@ from place_cube_ppo import execute as place_ppo_execute
 from place_cube_mpc import execute as place_mpc_execute
 from push_cube_ppo import execute as push_cube_ppo_execute
 from push_cube_mpc import execute as push_cube_mpc_execute
+from push_o_ppo import execute as push_o_ppo_execute
 
 
 def _parse_region(state_str: str) -> str | None:
@@ -82,11 +84,12 @@ def run(
     model: str = "gemini-2.5-flash",
     render: bool = False,
     skill: str = "ppo",
-    env_id: str = "PushT-WallObstacles-v1",
+    env_id: str = "PushO-WallObstacles-v1",
     checkpoint: str | None = None,
     pick_checkpoint: str | None = None,
     place_checkpoint: str | None = None,
     push_cube_checkpoint: str | None = None,
+    push_o_checkpoint: str | None = None,
 ):
     control_mode = "pd_ee_delta_pose"
     env = gym.make(
@@ -101,7 +104,7 @@ def run(
         _orig_render = env.render
         env.render = lambda *a, **kw: (_orig_render(*a, **kw), time.sleep(0.05))[0]
 
-    wrapper = ManiSkillPlanningWrapper(env, adapter=PushTTaskAdapter())
+    wrapper = ManiSkillPlanningWrapper(env, adapter=PushOTaskAdapter())
     obs, _ = wrapper.reset(seed=seed)
 
     for replan_i in range(max_replans):
@@ -221,10 +224,25 @@ def run(
                     skill_failed = True
                     break
 
-            elif sg_skill == "push_tee":
-                print(f"    [SKIP] 'push_tee' not yet implemented — re-planning")
-                skill_failed = True
-                break
+            elif sg_skill == "push_disk":
+                if push_o_checkpoint is None:
+                    print("    [SKIP] push_disk: no --push-o-checkpoint provided — re-planning")
+                    skill_failed = True
+                    break
+                if region is None:
+                    print(f"    [WARN] could not parse region from: {state!r}")
+                    skill_failed = True
+                    break
+                x, y = region_to_xy(region)
+                goal_xyz = np.array([x, y, 0.0], dtype=np.float32)
+                print(f"    → push_disk to {np.round(goal_xyz, 3)}")
+                success, obs = push_o_ppo_execute(
+                    env, obs, goal_xyz, checkpoint=push_o_checkpoint, render=render
+                )
+                print(f"    → {'OK' if success else 'FAIL'}")
+                if not success:
+                    skill_failed = True
+                    break
 
             else:
                 print(f"    [SKIP] '{sg_skill}' unknown — re-planning")
@@ -246,13 +264,15 @@ if __name__ == "__main__":
     ap.add_argument("--render",              action="store_true", help="Open a viewer window")
     ap.add_argument("--model",               default="gemini-2.5-flash")
     ap.add_argument("--skill",               default="ppo", choices=["mpc", "ppo"])
-    ap.add_argument("--reach-checkpoint",    default=None, dest="reach_checkpoint", help="Reach PPO checkpoint (required for --skill ppo)")
-    ap.add_argument("--pick-checkpoint",     default=None, dest="pick_checkpoint",
+    ap.add_argument("--reach-checkpoint",    default="Reach", dest="reach_checkpoint", help="Reach PPO checkpoint (required for --skill ppo)")
+    ap.add_argument("--pick-checkpoint",     default="PickSkill", dest="pick_checkpoint",
                     help="Pick skill PPO checkpoint")
-    ap.add_argument("--place-checkpoint",    default=None, dest="place_checkpoint",
+    ap.add_argument("--place-checkpoint",    default="PlaceSkill", dest="place_checkpoint",
                     help="Place skill PPO checkpoint")
-    ap.add_argument("--push-cube-checkpoint", default=None, dest="push_cube_checkpoint",
+    ap.add_argument("--push-cube-checkpoint", default="PushCube", dest="push_cube_checkpoint",
                     help="Push-cube skill PPO checkpoint")
+    ap.add_argument("--push-o-checkpoint", default="PushO", dest="push_o_checkpoint",
+                    help="Push-O skill PPO checkpoint")
     args = ap.parse_args()
     if args.skill == "ppo" and args.reach_checkpoint is None:
         ap.error("--reach-checkpoint is required when using --skill ppo")
@@ -267,4 +287,6 @@ if __name__ == "__main__":
         pick_checkpoint=_resolve_checkpoint(args.pick_checkpoint),
         place_checkpoint=_resolve_checkpoint(args.place_checkpoint),
         push_cube_checkpoint=_resolve_checkpoint(args.push_cube_checkpoint),
+        push_o_checkpoint=_resolve_checkpoint(args.push_o_checkpoint),
     )
+

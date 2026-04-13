@@ -112,7 +112,7 @@ def execute(
     device: str = "cpu",
 ) -> tuple[bool, dict]:
     """
-    Run the PPO pick policy on an already-running PushT env to grasp and lift
+    Run the PPO pick policy on an already-running PushO env to grasp and lift
     obstacle[block_idx].  Requires a checkpoint trained on PickSkillEnv with
     obs_mode='state'.
     Returns (success, latest_obs).

@@ -38,8 +38,8 @@ class Args:
     num_eval_envs: int = 8
     reconfiguration_freq: Optional[int] = None
     eval_reconfiguration_freq: Optional[int] = 1
-    num_steps: int = 50
-    num_eval_steps: int = 50
+    num_steps: int = 200
+    num_eval_steps: int = 200
     partial_reset: bool = True
     eval_partial_reset: bool = False
 
@@ -60,10 +60,10 @@ class Args:
     reward_scale: float = 1.0
     finite_horizon_gae: bool = False
 
-    eval_freq: int = 25
+    eval_freq: int = 10
     save_model: bool = True
     capture_video: bool = True
-    save_eval_video_freq: Optional[int] = 5
+    save_eval_video_freq: Optional[int] = 1
 
     evaluate: bool = False
     checkpoint: Optional[str] = None
@@ -106,7 +106,7 @@ def execute(
     device: str = "cpu",
 ) -> tuple[bool, dict]:
     """
-    Run the PPO push-cube policy on an already-running PushT env to push
+    Run the PPO push-cube policy on an already-running PushO env to push
     obstacle[block_idx] to goal_xyz.
     Requires a checkpoint trained on PushCube-WithObstacles-v1 with obs_mode='state'.
     Returns (success, latest_obs).
