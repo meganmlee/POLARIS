@@ -225,9 +225,24 @@ def run(
                     break
 
             elif sg_skill == "push_disk":
-                print(f"    [SKIP] 'push_disk' not yet implemented — re-planning")
-                skill_failed = True
-                break
+                if push_o_checkpoint is None:
+                    print("    [SKIP] push_disk: no --push-o-checkpoint provided — re-planning")
+                    skill_failed = True
+                    break
+                if region is None:
+                    print(f"    [WARN] could not parse region from: {state!r}")
+                    skill_failed = True
+                    break
+                x, y = region_to_xy(region)
+                goal_xyz = np.array([x, y, 0.0], dtype=np.float32)
+                print(f"    → push_disk to {np.round(goal_xyz, 3)}")
+                success, obs = push_o_ppo_execute(
+                    env, obs, goal_xyz, checkpoint=push_o_checkpoint, render=render
+                )
+                print(f"    → {'OK' if success else 'FAIL'}")
+                if not success:
+                    skill_failed = True
+                    break
 
             else:
                 print(f"    [SKIP] '{sg_skill}' unknown — re-planning")

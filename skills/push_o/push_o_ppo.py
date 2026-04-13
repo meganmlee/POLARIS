@@ -107,9 +107,11 @@ class Args:
 
 def _build_flat_obs(obs: dict, raw_env, goal_xyz: np.ndarray) -> np.ndarray:
     """
-    Reconstruct the 25-dim flat state vector that PushO-v1 produces during training.
+    Reconstruct the 45-dim flat state vector that PushO-v1 produces during training
+    (obs_mode="state" auto-flattens all extra fields; replicate that here for state_dict obs).
 
-    Layout: qpos(9) + qvel(9) + ee_pos(3) + ee_to_disk(3) + disk_to_goal(3) + overlap_frac(1) = 25
+    Layout: qpos(9) + qvel(9) + ee_pos(3) + ee_to_disk(3) + disk_to_goal(3)
+            + overlap_frac(1) + tcp_pose(7) + obj_pose(7) + goal_pos(3) = 45
     """
     qpos     = np.asarray(obs["agent"]["qpos"], dtype=np.float32).reshape(-1)
     qvel     = np.asarray(obs["agent"]["qvel"], dtype=np.float32).reshape(-1)
@@ -120,6 +122,9 @@ def _build_flat_obs(obs: dict, raw_env, goal_xyz: np.ndarray) -> np.ndarray:
     r       = float(raw_env.disk_radius)
     overlap = _circle_overlap_frac_np(disk_pos[:2], goal[:2], r)
 
+    tcp_pose = np.asarray(obs["extra"]["tcp_pose"], dtype=np.float32).reshape(-1)
+    obj_pose = np.asarray(obs["extra"]["obj_pose"], dtype=np.float32).reshape(-1)
+
     return np.concatenate([
         qpos,
         qvel,
@@ -127,6 +132,9 @@ def _build_flat_obs(obs: dict, raw_env, goal_xyz: np.ndarray) -> np.ndarray:
         disk_pos - ee_pos,   # ee_to_disk
         goal     - disk_pos, # disk_to_goal
         np.array([overlap], dtype=np.float32),
+        tcp_pose,            # tcp_pose(7)
+        obj_pose,            # obj_pose(7)
+        goal,                # goal_pos(3)
     ])
 
 
