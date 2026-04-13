@@ -7,7 +7,6 @@ from .maniskill_planning import (
     tcp_manipulability,
     weighted_reach_score,
 )
-# from .factory import make_pusht_vis_gt, make_pusht_vis_no_ori
 
 __all__ = [
     "ManiSkillPlanningWrapper",
@@ -17,6 +16,4 @@ __all__ = [
     "unwrap_maniskill_root",
     "tcp_manipulability",
     "weighted_reach_score",
-    # "make_pusht_vis_gt",
-    # "make_pusht_vis_no_ori",
 ]

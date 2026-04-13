@@ -135,7 +135,6 @@ All environments are in [envs/](envs/) and registered on `import envs`. RL and p
 | `Reach-WithObstacles-v1` | MoveToPoint | 4 randomized obstacle cubes |
 | `PushCube-WithObstacles-v1` | PushCube | 4 randomized obstacle cubes |
 | `PushO-WithObstacles-v1` | PushO | 4 randomized obstacle cubes |
-| `ObjectRetrieveFromShelf-v1` | Custom | Cluttered shelf, randomized target |
 
 ## Training & Evaluation
 
@@ -158,7 +157,6 @@ python push_cube_ppo.py \
     --evaluate \
     --checkpoint checkpoints/PushCube-WithObstacles-v1__1__<timestamp>/final_ckpt.pt
 ```
-![Evaluation will produce videos](image.png)
 
 ### Classical Skills
 
