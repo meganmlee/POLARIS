@@ -60,7 +60,7 @@ class Args:
     reward_scale: float = 1.0
     finite_horizon_gae: bool = False
 
-    eval_freq: int = 25
+    eval_freq: int = 10
     save_model: bool = True
     capture_video: bool = True
     save_eval_video_freq: Optional[int] = 1

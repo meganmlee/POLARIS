@@ -178,10 +178,42 @@ class PushCubeWithObstaclesEnv(PushOWithObstaclesEnv):
 
     GOAL_THRESHOLD = 0.05
 
+    def _load_scene(self, options: dict):
+        super()._load_scene(options)
+        # Cyan sphere: marks the goal cube's starting position each episode
+        self.goal_cube_start_site = actors.build_sphere(
+            self.scene,
+            radius=self.GOAL_THRESHOLD,
+            color=[0, 0.8, 1, 0.5],
+            name="goal_cube_start_site",
+            body_type="kinematic",
+            add_collision=False,
+            initial_pose=sapien.Pose(),
+        )
+        self._hidden_objects.append(self.goal_cube_start_site)
+        # Green sphere: marks the goal position the cube must be pushed to
+        self.goal_cube_target_site = actors.build_sphere(
+            self.scene,
+            radius=self.GOAL_THRESHOLD,
+            color=[0, 1, 0, 0.5],
+            name="goal_cube_target_site",
+            body_type="kinematic",
+            add_collision=False,
+            initial_pose=sapien.Pose(),
+        )
+        self._hidden_objects.append(self.goal_cube_target_site)
+
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         super()._initialize_episode(env_idx, options)
         with torch.device(self.device):
             b = len(env_idx)
+
+            # Park the disk and goal_site off-table — they are unused in this env.
+            q_id = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).expand(b, 4)
+            park_p = torch.tensor([[2.0, 0.0, 0.05]], device=self.device).expand(b, 3)
+            park_pose = Pose.create_from_pq(p=park_p, q=q_id)
+            self.disk.set_pose(park_pose)
+            self.goal_site.set_pose(park_pose)
 
             # Randomly pick which obstacle is the push target for each env
             if not hasattr(self, "goal_obstacle_idx") or self.goal_obstacle_idx.shape[0] != self.num_envs:
@@ -195,6 +227,18 @@ class PushCubeWithObstaclesEnv(PushOWithObstaclesEnv):
                 self.goal_pos = torch.zeros((self.num_envs, 3), device=self.device)
             self.goal_pos[env_idx] = torch.cat(
                 [goal_xy, torch.zeros((b, 1), device=self.device)], dim=1)
+
+            # Place cyan start-position marker at the goal cube's initial XY
+            all_obs_pos = torch.stack(
+                [obs.pose.p for obs in self.obstacles], dim=0
+            )  # (num_obstacles, num_envs, 3)
+            goal_idx_b = self.goal_obstacle_idx[env_idx]  # (b,)
+            start_xyz = all_obs_pos[goal_idx_b, env_idx]  # (b, 3)
+            self.goal_cube_start_site.set_pose(Pose.create_from_pq(p=start_xyz, q=q_id))
+
+            # Place green target marker at the sampled goal XY on the table surface
+            target_xyz = torch.cat([goal_xy, torch.zeros((b, 1), device=self.device)], dim=1)
+            self.goal_cube_target_site.set_pose(Pose.create_from_pq(p=target_xyz, q=q_id))
 
     def _get_goal_cube_pos(self) -> torch.Tensor:
         """Position of the selected goal obstacle for each env. Shape: (num_envs, 3)."""

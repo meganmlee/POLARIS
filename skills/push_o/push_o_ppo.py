@@ -71,7 +71,7 @@ class Args:
     partial_reset: bool = True
     eval_partial_reset: bool = False
 
-    total_timesteps: int = 6_000_000
+    total_timesteps: int = 10_000_000
     learning_rate: float = 3e-4
     anneal_lr: bool = False
     gamma: float = 0.8
@@ -88,7 +88,7 @@ class Args:
     reward_scale: float = 1.0
     finite_horizon_gae: bool = False
 
-    eval_freq: int = 8
+    eval_freq: int = 20
     save_model: bool = True
     capture_video: bool = True
     save_eval_video_freq: Optional[int] = 1
