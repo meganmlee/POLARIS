@@ -159,6 +159,69 @@ def execute(
     return bool((not is_grasped) and cube_near and cube_rest and ee_away), current_obs
 
 
+class PlaceMPCPreviewSession:
+    """One MPPI place step at a time — mirrors `execute` for metric lookahead."""
+
+    def __init__(self, env, block_idx: int, goal_xyz: np.ndarray, **kwargs):
+        self.env = env
+        self.raw = env.unwrapped
+        self.obstacle = self.raw.obstacles[block_idx]
+        self.goal_xyz = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
+        self.kwargs = kwargs
+        self.act_dim = env.action_space.shape[0]
+        self.reset()
+
+    def reset(self) -> None:
+        self.controller = PlaceMPPI(**self.kwargs)
+        self.phase = "carry"
+        self.release_steps = 0
+
+    def step_action(self, obs: dict) -> np.ndarray:
+        raw = self.raw
+        obstacle = self.obstacle
+        controller = self.controller
+        goal_xyz = self.goal_xyz
+        ee_pos = get_ee_pos(obs)
+        cube_pos = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
+        is_grasped = bool(raw.agent.is_grasping(obstacle).cpu().numpy().any())
+
+        if self.phase == "carry":
+            target = goal_xyz.copy()
+            target[2] = HOVER_HEIGHT
+            gripper_cmd = -1.0
+            xy_dist = float(np.linalg.norm(ee_pos[:2] - goal_xyz[:2]))
+            if xy_dist < 0.02:
+                self.phase = "lower"
+                controller.nominal[:] = 0.0
+        elif self.phase == "lower":
+            target = goal_xyz.copy()
+            target[2] = PLACE_HEIGHT
+            gripper_cmd = -1.0
+            if ee_pos[2] < PLACE_HEIGHT + 0.02:
+                self.phase = "release"
+                self.release_steps = 0
+        elif self.phase == "release":
+            target = ee_pos.copy()
+            gripper_cmd = 1.0
+            self.release_steps += 1
+            if self.release_steps > 15:
+                self.phase = "retreat"
+                controller.nominal[:] = 0.0
+        elif self.phase == "retreat":
+            target = ee_pos.copy()
+            target[2] = RETREAT_HEIGHT
+            gripper_cmd = 1.0
+        else:
+            target = goal_xyz.copy()
+            gripper_cmd = -1.0
+
+        delta = controller.get_action({"ee_pos": ee_pos, "target": target})
+        action = np.zeros(self.act_dim, dtype=np.float32)
+        action[:3] = delta
+        action[-1] = gripper_cmd
+        return action
+
+
 # ---------------------------------------------------------------------------
 # Evaluation loop
 # ---------------------------------------------------------------------------

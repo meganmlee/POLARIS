@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -120,11 +120,13 @@ def execute(
     max_steps: int = 200,
     render: bool = False,
     device: str = "cpu",
+    agent: Any | None = None,
 ) -> tuple[bool, dict]:
     """
     Run the PPO place policy on an already-running PushO env to set
     obstacle[block_idx] down at goal_xyz, then retreat.
     Requires a checkpoint trained on PlaceSkillEnv with obs_mode='state'.
+    Pass `agent` to reuse a loaded network.
     Returns (success, latest_obs).
     """
     raw      = env.unwrapped
@@ -134,7 +136,8 @@ def execute(
     RETREAT_DIST  = 0.05
     REST_Z_THRESH = 0.05
 
-    agent = load_agent(checkpoint, device)
+    if agent is None:
+        agent = load_agent(checkpoint, device)
     action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
     action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
 

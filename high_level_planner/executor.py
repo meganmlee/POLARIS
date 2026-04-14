@@ -1,17 +1,15 @@
 """
 Closed-loop executor: generate subgoals → execute skill → re-plan → repeat.
 
-Usage:
-    python high_level_planner/executor.py --seed 42 --reach-checkpoint Reach-WithObstacles-v1__1__<timestamp>
-    python high_level_planner/executor.py --seed 42 --skill mpc
-    python high_level_planner/executor.py --seed 3 --max_replans 5 --offline --skill mpc
-    python high_level_planner/executor.py --seed 0 \\
-        --reach-checkpoint Reach-WithObstacles-v1__1__<ts> \\
-        --push-cube-checkpoint PushCube-WithObstacles-v1__1__<ts>
+Push-O (O-shaped disk) with wall obstacles. Default env: PushO-WallObstacles-v1.
 
-Checkpoint args accept either a full path or just a run name from the checkpoints/ folder.
-e.g. --reach-checkpoint Reach-WithObstacles-v1__1__1773025568
-  expands to checkpoints/Reach-WithObstacles-v1__1__1773025568/final_ckpt.pt
+Usage:
+    python high_level_planner/executor.py --seed 42 --reach-checkpoint <run_name>
+    python high_level_planner/executor.py --seed 42 --skill mpc
+    python high_level_planner/executor.py --skill auto --reach-checkpoint <run_name>
+        # reach: compares lookahead_planner_score vs lookahead_rl_score (skills.metrics), then MPC or PPO
+
+Checkpoint args accept either a full path or just a run name under checkpoints/{name}/final_ckpt.pt.
 """
 import argparse
 import os
@@ -36,6 +34,7 @@ def _resolve_checkpoint(ckpt: str | None) -> str | None:
     raise FileNotFoundError(f"Checkpoint not found: {ckpt!r} (tried {candidate})")
 
 import numpy as np
+import torch
 
 # Make project root and all skill dirs importable
 _ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -51,17 +50,25 @@ import envs  # noqa: F401 — registers ManiSkill envs
 import gymnasium as gym
 from planning_wrapper.adapters import PushOTaskAdapter
 from planning_wrapper.wrappers.maniskill_planning import ManiSkillPlanningWrapper
+from mpc_base import get_ee_pos
+from skills.metrics import (
+    lookahead_reach_mppi_score,
+    lookahead_rl_score,
+    lookahead_rollout_score,
+    select_reach_backend,
+)
+from ppo_base import load_agent
 
 from llm_plan import region_to_xy
 from env_subgoal_runner import subgoals_from_wrapper
 from reach_mpc import execute as mpc_execute
-from reach_ppo import execute as ppo_execute
-from pick_cube_ppo import execute as pick_ppo_execute
-from pick_cube_mpc import execute as pick_mpc_execute
-from place_cube_ppo import execute as place_ppo_execute
-from place_cube_mpc import execute as place_mpc_execute
-from push_cube_ppo import execute as push_cube_ppo_execute
-from push_cube_mpc import execute as push_cube_mpc_execute
+from reach_ppo import _build_flat_obs, execute as ppo_execute
+from pick_cube_ppo import _build_pick_obs, execute as pick_ppo_execute
+from pick_cube_mpc import PickMPCPreviewSession, execute as pick_mpc_execute
+from place_cube_ppo import _build_place_obs, execute as place_ppo_execute
+from place_cube_mpc import PlaceMPCPreviewSession, execute as place_mpc_execute
+from push_cube_ppo import _build_push_cube_obs, execute as push_cube_ppo_execute
+from push_cube_mpc import PushCubeMPCPreviewSession, execute as push_cube_mpc_execute
 from push_o_ppo import execute as push_o_ppo_execute
 
 
@@ -77,6 +84,85 @@ def _parse_block(state_str: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _reach_policy_act(goal_xyz: np.ndarray, agent, env, device: str):
+    """Single-step policy callable for lookahead_rl_score (matches reach_ppo action clamping)."""
+    action_low = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
+    action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
+    g = goal_xyz.astype(np.float32)
+
+    def policy_act(obs):
+        flat = _build_flat_obs(obs, g)
+        obs_t = torch.from_numpy(flat).float().unsqueeze(0).to(device)
+        with torch.no_grad():
+            return torch.clamp(agent.get_action(obs_t, deterministic=True), action_low, action_high)
+
+    return policy_act
+
+
+def _pick_ppo_policy_act(block_idx: int, agent, env, device: str):
+    raw = env.unwrapped
+    obstacle = raw.obstacles[block_idx]
+    action_low = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
+    action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
+
+    def policy_act(obs):
+        flat = _build_pick_obs(obs, raw, obstacle)
+        obs_t = torch.from_numpy(flat).float().unsqueeze(0).to(device)
+        with torch.no_grad():
+            return torch.clamp(agent.get_action(obs_t, deterministic=True), action_low, action_high)
+
+    return policy_act
+
+
+def _place_ppo_policy_act(block_idx: int, goal_xyz: np.ndarray, agent, env, device: str):
+    raw = env.unwrapped
+    obstacle = raw.obstacles[block_idx]
+    g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
+    action_low = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
+    action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
+
+    def policy_act(obs):
+        flat = _build_place_obs(obs, raw, obstacle, g)
+        obs_t = torch.from_numpy(flat).float().unsqueeze(0).to(device)
+        with torch.no_grad():
+            return torch.clamp(agent.get_action(obs_t, deterministic=True), action_low, action_high)
+
+    return policy_act
+
+
+def _push_cube_ppo_policy_act(block_idx: int, goal_xyz: np.ndarray, agent, env, device: str):
+    raw = env.unwrapped
+    obstacle = raw.obstacles[block_idx]
+    g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
+    action_low = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
+    action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
+
+    def policy_act(obs):
+        flat = _build_push_cube_obs(obs, raw, obstacle, g)
+        obs_t = torch.from_numpy(flat).float().unsqueeze(0).to(device)
+        with torch.no_grad():
+            return torch.clamp(agent.get_action(obs_t, deterministic=True), action_low, action_high)
+
+    return policy_act
+
+
+def _push_o_ppo_policy_act(goal_xyz: np.ndarray, agent, env, device: str):
+    from push_o_ppo import _build_flat_obs as _build_push_o_flat
+
+    raw = env.unwrapped
+    g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
+    action_low = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
+    action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
+
+    def policy_act(obs):
+        flat = _build_push_o_flat(obs, raw, g)
+        obs_t = torch.from_numpy(flat).float().unsqueeze(0).to(device)
+        with torch.no_grad():
+            return torch.clamp(agent.get_action(obs_t, deterministic=True), action_low, action_high)
+
+    return policy_act
+
+
 def run(
     seed: int = 0,
     max_replans: int = 10,
@@ -90,8 +176,11 @@ def run(
     place_checkpoint: str | None = None,
     push_cube_checkpoint: str | None = None,
     push_o_checkpoint: str | None = None,
+    reach_device: str | None = None,
 ):
     control_mode = "pd_ee_delta_pose"
+    dev = reach_device or ("cuda" if torch.cuda.is_available() else "cpu")
+    skill_agents: dict = {"reach": None, "pick": None, "place": None, "push_cube": None, "push_o": None}
     env = gym.make(
         env_id,
         num_envs=1,
@@ -137,8 +226,34 @@ def run(
                 goal_xyz = np.array([x, y, max(ee_z, 0.10)], dtype=np.float32)
                 print(f"    → reach {np.round(goal_xyz, 3)}")
 
-                if skill == "ppo":
-                    success, obs = ppo_execute(env, obs, goal_xyz, checkpoint=checkpoint, render=render)
+                if skill == "auto":
+                    if checkpoint is None:
+                        print("    [ERR] --skill auto requires --reach-checkpoint")
+                        skill_failed = True
+                        break
+                    if skill_agents["reach"] is None:
+                        skill_agents["reach"] = load_agent(checkpoint, dev)
+                    rag = skill_agents["reach"]
+                    ms, mi = lookahead_reach_mppi_score(wrapper, obs, goal_xyz)
+                    policy_act = _reach_policy_act(goal_xyz, rag, env, dev)
+                    rs, ri = lookahead_rl_score(wrapper, goal_xyz, policy_act, obs)
+                    choice = select_reach_backend(ms, rs)
+                    print(
+                        f"    [metrics] mpc_score={ms:.4f} {mi} | "
+                        f"ppo_score={rs:.4f} {ri} → backend={choice}"
+                    )
+                    if choice == "planner":
+                        success, obs = mpc_execute(env, obs, goal_xyz, render=render)
+                    else:
+                        success, obs = ppo_execute(
+                            env, obs, goal_xyz, checkpoint=checkpoint, render=render, device=dev, agent=rag
+                        )
+                elif skill == "ppo":
+                    if skill_agents["reach"] is None:
+                        skill_agents["reach"] = load_agent(checkpoint, dev)
+                    success, obs = ppo_execute(
+                        env, obs, goal_xyz, checkpoint=checkpoint, render=render, device=dev, agent=skill_agents["reach"]
+                    )
                 else:
                     success, obs = mpc_execute(env, obs, goal_xyz, render=render)
 
@@ -154,13 +269,46 @@ def run(
                     break
                 print(f"    → pick cube{block_idx}")
 
-                if skill == "ppo":
+                if skill == "auto":
                     if pick_checkpoint is None:
                         print("    [SKIP] pick: no --pick-checkpoint provided — re-planning")
                         skill_failed = True
                         break
+                    if skill_agents["pick"] is None:
+                        skill_agents["pick"] = load_agent(pick_checkpoint, dev)
+                    raw_e = env.unwrapped
+
+                    def _pick_prog(o, inf):
+                        ee = get_ee_pos(o)
+                        c = raw_e.obstacles[block_idx].pose.p.cpu().numpy().reshape(3)
+                        return float(np.linalg.norm(ee - c))
+
+                    mpc_sess = PickMPCPreviewSession(env, block_idx)
+                    mpc_sess.reset()
+                    ms, mi = lookahead_rollout_score(
+                        wrapper, lambda o: mpc_sess.step_action(o), obs, _pick_prog
+                    )
+                    ppo_act = _pick_ppo_policy_act(block_idx, skill_agents["pick"], env, dev)
+                    rs, ri = lookahead_rollout_score(wrapper, ppo_act, obs, _pick_prog)
+                    choice = select_reach_backend(ms, rs)
+                    print(
+                        f"    [metrics] mpc_score={ms:.4f} {mi} | ppo_score={rs:.4f} {ri} → backend={choice}"
+                    )
+                    if choice == "planner":
+                        success, obs = pick_mpc_execute(env, obs, block_idx, render=render)
+                    else:
+                        success, obs = pick_ppo_execute(
+                            env, obs, block_idx, checkpoint=pick_checkpoint, render=render, device=dev, agent=skill_agents["pick"]
+                        )
+                elif skill == "ppo":
+                    if pick_checkpoint is None:
+                        print("    [SKIP] pick: no --pick-checkpoint provided — re-planning")
+                        skill_failed = True
+                        break
+                    if skill_agents["pick"] is None:
+                        skill_agents["pick"] = load_agent(pick_checkpoint, dev)
                     success, obs = pick_ppo_execute(
-                        env, obs, block_idx, checkpoint=pick_checkpoint, render=render
+                        env, obs, block_idx, checkpoint=pick_checkpoint, render=render, device=dev, agent=skill_agents["pick"]
                     )
                 else:
                     success, obs = pick_mpc_execute(
@@ -181,13 +329,46 @@ def run(
                 goal_xyz = np.array([x, y, 0.02], dtype=np.float32)  # table-surface height
                 print(f"    → place cube{block_idx} at {np.round(goal_xyz, 3)}")
 
-                if skill == "ppo":
+                if skill == "auto":
                     if place_checkpoint is None:
                         print("    [SKIP] place: no --place-checkpoint provided — re-planning")
                         skill_failed = True
                         break
+                    if skill_agents["place"] is None:
+                        skill_agents["place"] = load_agent(place_checkpoint, dev)
+                    g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
+                    raw_e = env.unwrapped
+
+                    def _place_prog(o, inf):
+                        cube = raw_e.obstacles[block_idx].pose.p.cpu().numpy().reshape(3)
+                        return float(np.linalg.norm(cube[:2] - g[:2]) + 0.3 * abs(cube[2] - g[2]))
+
+                    mpc_sess = PlaceMPCPreviewSession(env, block_idx, goal_xyz)
+                    mpc_sess.reset()
+                    ms, mi = lookahead_rollout_score(
+                        wrapper, lambda o: mpc_sess.step_action(o), obs, _place_prog
+                    )
+                    ppo_act = _place_ppo_policy_act(block_idx, goal_xyz, skill_agents["place"], env, dev)
+                    rs, ri = lookahead_rollout_score(wrapper, ppo_act, obs, _place_prog)
+                    choice = select_reach_backend(ms, rs)
+                    print(
+                        f"    [metrics] mpc_score={ms:.4f} {mi} | ppo_score={rs:.4f} {ri} → backend={choice}"
+                    )
+                    if choice == "planner":
+                        success, obs = place_mpc_execute(env, obs, block_idx, goal_xyz, render=render)
+                    else:
+                        success, obs = place_ppo_execute(
+                            env, obs, block_idx, goal_xyz, checkpoint=place_checkpoint, render=render, device=dev, agent=skill_agents["place"]
+                        )
+                elif skill == "ppo":
+                    if place_checkpoint is None:
+                        print("    [SKIP] place: no --place-checkpoint provided — re-planning")
+                        skill_failed = True
+                        break
+                    if skill_agents["place"] is None:
+                        skill_agents["place"] = load_agent(place_checkpoint, dev)
                     success, obs = place_ppo_execute(
-                        env, obs, block_idx, goal_xyz, checkpoint=place_checkpoint, render=render
+                        env, obs, block_idx, goal_xyz, checkpoint=place_checkpoint, render=render, device=dev, agent=skill_agents["place"]
                     )
                 else:
                     success, obs = place_mpc_execute(
@@ -207,13 +388,46 @@ def run(
                 goal_xyz = np.array([x, y, 0.0], dtype=np.float32)
                 print(f"    → push_cube obstacle{block_idx} to {np.round(goal_xyz, 3)}")
 
-                if skill == "ppo":
+                if skill == "auto":
                     if push_cube_checkpoint is None:
                         print("    [SKIP] push_cube: no --push-cube-checkpoint provided — re-planning")
                         skill_failed = True
                         break
+                    if skill_agents["push_cube"] is None:
+                        skill_agents["push_cube"] = load_agent(push_cube_checkpoint, dev)
+                    g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
+                    raw_e = env.unwrapped
+
+                    def _pc_prog(o, inf):
+                        cube = raw_e.obstacles[block_idx].pose.p.cpu().numpy().reshape(3)
+                        return float(np.linalg.norm(cube[:2] - g[:2]))
+
+                    mpc_sess = PushCubeMPCPreviewSession(env, block_idx, goal_xyz)
+                    mpc_sess.reset()
+                    ms, mi = lookahead_rollout_score(
+                        wrapper, lambda o: mpc_sess.step_action(o), obs, _pc_prog
+                    )
+                    ppo_act = _push_cube_ppo_policy_act(block_idx, goal_xyz, skill_agents["push_cube"], env, dev)
+                    rs, ri = lookahead_rollout_score(wrapper, ppo_act, obs, _pc_prog)
+                    choice = select_reach_backend(ms, rs)
+                    print(
+                        f"    [metrics] mpc_score={ms:.4f} {mi} | ppo_score={rs:.4f} {ri} → backend={choice}"
+                    )
+                    if choice == "planner":
+                        success, obs = push_cube_mpc_execute(env, obs, block_idx, goal_xyz, render=render)
+                    else:
+                        success, obs = push_cube_ppo_execute(
+                            env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=render, device=dev, agent=skill_agents["push_cube"]
+                        )
+                elif skill == "ppo":
+                    if push_cube_checkpoint is None:
+                        print("    [SKIP] push_cube: no --push-cube-checkpoint provided — re-planning")
+                        skill_failed = True
+                        break
+                    if skill_agents["push_cube"] is None:
+                        skill_agents["push_cube"] = load_agent(push_cube_checkpoint, dev)
                     success, obs = push_cube_ppo_execute(
-                        env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=render
+                        env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=render, device=dev, agent=skill_agents["push_cube"]
                     )
                 else:
                     success, obs = push_cube_mpc_execute(
@@ -236,9 +450,28 @@ def run(
                 x, y = region_to_xy(region)
                 goal_xyz = np.array([x, y, 0.0], dtype=np.float32)
                 print(f"    → push_disk to {np.round(goal_xyz, 3)}")
-                success, obs = push_o_ppo_execute(
-                    env, obs, goal_xyz, checkpoint=push_o_checkpoint, render=render
-                )
+                if skill == "auto":
+                    if skill_agents["push_o"] is None:
+                        skill_agents["push_o"] = load_agent(push_o_checkpoint, dev)
+                    g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
+                    raw_e = env.unwrapped
+
+                    def _pod_prog(o, inf):
+                        d = raw_e.disk.pose.p.cpu().numpy().reshape(3)
+                        return float(np.linalg.norm(d[:2] - g[:2]))
+
+                    ppo_act = _push_o_ppo_policy_act(goal_xyz, skill_agents["push_o"], env, dev)
+                    rs, ri = lookahead_rollout_score(wrapper, ppo_act, obs, _pod_prog)
+                    print(
+                        f"    [metrics] push_disk: PPO-only (no MPC skill) preview_score={rs:.4f} {ri}"
+                    )
+                    success, obs = push_o_ppo_execute(
+                        env, obs, goal_xyz, checkpoint=push_o_checkpoint, render=render, device=dev, agent=skill_agents["push_o"]
+                    )
+                else:
+                    success, obs = push_o_ppo_execute(
+                        env, obs, goal_xyz, checkpoint=push_o_checkpoint, render=render, device=dev
+                    )
                 print(f"    → {'OK' if success else 'FAIL'}")
                 if not success:
                     skill_failed = True
@@ -263,8 +496,12 @@ if __name__ == "__main__":
     ap.add_argument("--offline",             action="store_true")
     ap.add_argument("--render",              action="store_true", help="Open a viewer window")
     ap.add_argument("--model",               default="gemini-2.5-flash")
-    ap.add_argument("--skill",               default="ppo", choices=["mpc", "ppo"])
-    ap.add_argument("--reach-checkpoint",    default="Reach", dest="reach_checkpoint", help="Reach PPO checkpoint (required for --skill ppo)")
+    ap.add_argument("--skill",               default="ppo", choices=["mpc", "ppo", "auto"],
+                    help="auto: MPC vs PPO preview metrics per subgoal (push_disk: PPO-only preview)")
+    ap.add_argument("--reach-checkpoint",    default="Reach", dest="reach_checkpoint",
+                    help="Reach PPO checkpoint (required for --skill ppo or auto)")
+    ap.add_argument("--reach-device",        default=None, dest="reach_device",
+                    help="cuda|cpu for reach PPO / auto RL preview (default: auto-detect)")
     ap.add_argument("--pick-checkpoint",     default="PickSkill", dest="pick_checkpoint",
                     help="Pick skill PPO checkpoint")
     ap.add_argument("--place-checkpoint",    default="PlaceSkill", dest="place_checkpoint",
@@ -274,8 +511,8 @@ if __name__ == "__main__":
     ap.add_argument("--push-o-checkpoint", default="PushO", dest="push_o_checkpoint",
                     help="Push-O skill PPO checkpoint")
     args = ap.parse_args()
-    if args.skill == "ppo" and args.reach_checkpoint is None:
-        ap.error("--reach-checkpoint is required when using --skill ppo")
+    if args.skill in ("ppo", "auto") and args.reach_checkpoint is None:
+        ap.error("--reach-checkpoint is required when using --skill ppo or auto")
     run(
         seed=args.seed,
         max_replans=args.max_replans,
@@ -284,6 +521,7 @@ if __name__ == "__main__":
         render=args.render,
         skill=args.skill,
         checkpoint=_resolve_checkpoint(args.reach_checkpoint),
+        reach_device=args.reach_device,
         pick_checkpoint=_resolve_checkpoint(args.pick_checkpoint),
         place_checkpoint=_resolve_checkpoint(args.place_checkpoint),
         push_cube_checkpoint=_resolve_checkpoint(args.push_cube_checkpoint),

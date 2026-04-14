@@ -153,6 +153,53 @@ def execute(
     return bool(np.linalg.norm(cube_pos[:2] - goal_xyz[:2]) < success_threshold), current_obs
 
 
+class PushCubeMPCPreviewSession:
+    """One MPPI push-cube step at a time — mirrors `execute` for metric lookahead."""
+
+    def __init__(self, env, block_idx: int, goal_xyz: np.ndarray, **kwargs):
+        self.env = env
+        self.raw = env.unwrapped
+        self.obstacle = self.raw.obstacles[block_idx]
+        self.goal_xyz = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
+        self.kwargs = kwargs
+        self.act_dim = env.action_space.shape[0]
+        self.reset()
+
+    def reset(self) -> None:
+        self.controller = PushCubeMPPI(goal_xyz=self.goal_xyz, **self.kwargs)
+        self.phase = "hover"
+
+    def step_action(self, obs: dict) -> np.ndarray:
+        obstacle = self.obstacle
+        goal_xyz = self.goal_xyz
+        ee_pos = get_ee_pos(obs)
+        cube_pos = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
+        push_vec = goal_xyz[:2] - cube_pos[:2]
+        push_dir = push_vec / (np.linalg.norm(push_vec) + 1e-6)
+        stage_xy = cube_pos[:2] - push_dir * STAGE_OFFSET
+
+        if self.phase == "hover":
+            target = np.array([stage_xy[0], stage_xy[1], STAGE_HIGH_Z], dtype=np.float32)
+            diff = target - ee_pos
+            delta = np.clip(diff / EE_POS_ACTION_SCALE, -1.0, 1.0).astype(np.float32)
+            if float(np.linalg.norm(ee_pos[:2] - stage_xy)) < STAGE_XY_ALIGN:
+                self.phase = "descend"
+        elif self.phase == "descend":
+            target = np.array([stage_xy[0], stage_xy[1], PUSH_Z], dtype=np.float32)
+            diff = target - ee_pos
+            delta = np.clip(diff / EE_POS_ACTION_SCALE, -1.0, 1.0).astype(np.float32)
+            if float(np.linalg.norm(ee_pos - target)) < STAGE_ALIGN_DIST:
+                self.phase = "push"
+                self.controller.nominal[:] = 0.0
+        else:
+            target = np.array([goal_xyz[0], goal_xyz[1], PUSH_Z], dtype=np.float32)
+            delta = self.controller.get_action({"ee_pos": ee_pos, "cube_pos": cube_pos, "target": target})
+
+        action = np.zeros(self.act_dim, dtype=np.float32)
+        action[:3] = delta
+        return action
+
+
 # ---------------------------------------------------------------------------
 # Evaluation loop
 # ---------------------------------------------------------------------------

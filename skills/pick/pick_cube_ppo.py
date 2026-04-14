@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -110,17 +110,19 @@ def execute(
     max_steps: int = 200,
     render: bool = False,
     device: str = "cpu",
+    agent: Any | None = None,
 ) -> tuple[bool, dict]:
     """
     Run the PPO pick policy on an already-running PushO env to grasp and lift
     obstacle[block_idx].  Requires a checkpoint trained on PickSkillEnv with
-    obs_mode='state'.
+    obs_mode='state'. Pass `agent` to reuse a loaded network.
     Returns (success, latest_obs).
     """
     raw      = env.unwrapped
     obstacle = raw.obstacles[block_idx]
 
-    agent = load_agent(checkpoint, device)
+    if agent is None:
+        agent = load_agent(checkpoint, device)
     action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
     action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
 

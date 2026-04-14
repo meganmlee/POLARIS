@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -105,13 +105,16 @@ def execute(
     max_steps: int = 200,
     render: bool = False,
     device: str = "cpu",
+    agent: Any | None = None,
 ) -> tuple[bool, dict]:
     """
     Run the PPO reach policy on an already-running env to move EE to goal_xyz.
     Requires a checkpoint trained on Reach-WithObstacles-v1 with obs_mode='state'.
+    Pass a pre-loaded `agent` to avoid reloading weights (same behavior as load_agent).
     Returns (success, latest_obs).
     """
-    agent = load_agent(checkpoint, device)
+    if agent is None:
+        agent = load_agent(checkpoint, device)
     action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
     action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
 

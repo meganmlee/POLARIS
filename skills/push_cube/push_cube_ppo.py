@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -104,11 +104,13 @@ def execute(
     max_steps: int = 200,
     render: bool = False,
     device: str = "cpu",
+    agent: Any | None = None,
 ) -> tuple[bool, dict]:
     """
     Run the PPO push-cube policy on an already-running PushO env to push
     obstacle[block_idx] to goal_xyz.
     Requires a checkpoint trained on PushCube-WithObstacles-v1 with obs_mode='state'.
+    Pass `agent` to reuse a loaded network.
     Returns (success, latest_obs).
     """
     raw      = env.unwrapped
@@ -116,7 +118,8 @@ def execute(
 
     GOAL_THRESHOLD = 0.05
 
-    agent = load_agent(checkpoint, device)
+    if agent is None:
+        agent = load_agent(checkpoint, device)
     action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
     action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
 

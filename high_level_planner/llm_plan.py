@@ -389,14 +389,14 @@ def _call_gemini_subgoals(domain: str, problem_str: str, model: str, temperature
         gemini_model = default_model
     gen_model = GenerativeModel(gemini_model)
     goal_region = _goal_region_from_problem(problem_str) or "r_0_0"
-    prompt = f"""You decompose this manipulation task into ordered logical subgoals (milestones), like splitting a big goal into steps.
+    prompt = f"""You decompose this Push-O task into ordered logical subgoals (milestones). The movable object is an O-shaped disk (circular puck), not a T-piece; PDDL uses the constant `disk` for it.
 Each line is one milestone: the SKILL that achieves it, then TAB, then the target state as ONE PDDL atom in parentheses.
 
 Rules:
 - Order matters: earlier lines must be achievable before later ones.
 - End with: push_disk	(object-at disk {goal_region})
 - Before that push chain: if obstacles block the path, clear them (pick/place or push_cube), then reach to the disk's cell, then many push_disk steps (one grid cell per push_disk toward {goal_region}).
-- Skills: reach, push_disk, pick, place, push_cube. States: (robot-at robot1 r_i_j), (object-at disk r_i_j), (holding robot1 obstacleN), (obstacle-at obstacleN r_i_j).
+- Skills: reach, push_disk, pick, place, push_cube. States: (robot-at robot1 r_i_j), (object-at disk r_i_j), (holding robot1 obstacleN), (obstacle-at obstacleN r_i_j). Never use tee or push_tee — only disk and push_disk.
 
 Domain:
 {domain}

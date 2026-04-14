@@ -160,6 +160,72 @@ def execute(
     return bool(is_grasped and cube_z > success_threshold_z), current_obs
 
 
+class PickMPCPreviewSession:
+    """One MPPI pick step at a time — mirrors `execute` for metric lookahead (executor auto mode)."""
+
+    def __init__(self, env, block_idx: int, **kwargs):
+        self.env = env
+        self.raw = env.unwrapped
+        self.obstacle = self.raw.obstacles[block_idx]
+        self.kwargs = kwargs
+        self.act_dim = env.action_space.shape[0]
+        self.reset()
+
+    def reset(self) -> None:
+        self.controller = PickMPPI(**self.kwargs)
+        self.phase = "approach"
+        self.close_steps = 0
+
+    def step_action(self, obs: dict) -> np.ndarray:
+        """Single `execute` iteration: same targets and phase transitions as `execute`."""
+        raw = self.raw
+        obstacle = self.obstacle
+        controller = self.controller
+        ee_pos = get_ee_pos(obs)
+        cube_pos = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
+        is_grasped = bool(raw.agent.is_grasping(obstacle).cpu().numpy().any())
+
+        if self.phase == "approach":
+            target = cube_pos.copy()
+            target[2] += APPROACH_HEIGHT
+            gripper_cmd = 1.0
+            xy_dist = float(np.linalg.norm(ee_pos[:2] - cube_pos[:2]))
+            if xy_dist < XY_ALIGNED and ee_pos[2] > cube_pos[2] + APPROACH_HEIGHT * 0.5:
+                self.phase = "descend"
+                controller.nominal[:] = 0.0
+        elif self.phase == "descend":
+            target = cube_pos.copy()
+            gripper_cmd = 1.0
+            z_dist = ee_pos[2] - cube_pos[2]
+            if z_dist < DESCEND_Z_TRIGGER:
+                self.phase = "close"
+                self.close_steps = 0
+        elif self.phase == "close":
+            target = cube_pos.copy()
+            gripper_cmd = -1.0
+            self.close_steps += 1
+            if self.close_steps > 15:
+                self.phase = "lift"
+                controller.nominal[:] = 0.0
+        elif self.phase == "lift":
+            if is_grasped:
+                target = ee_pos.copy()
+                target[2] = LIFT_Z
+            else:
+                self.phase = "descend"
+                target = cube_pos.copy()
+            gripper_cmd = -1.0
+        else:
+            target = cube_pos.copy()
+            gripper_cmd = 1.0
+
+        delta = controller.get_action({"ee_pos": ee_pos, "target": target})
+        action = np.zeros(self.act_dim, dtype=np.float32)
+        action[:3] = delta
+        action[-1] = gripper_cmd
+        return action
+
+
 # ---------------------------------------------------------------------------
 # Evaluation loop
 # ---------------------------------------------------------------------------
