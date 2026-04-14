@@ -478,14 +478,6 @@ def lookahead_rollout_score(
                 act = act.detach().cpu().numpy()
             act = np.asarray(act, dtype=np.float32).reshape(-1)
             o, _, term, trunc, info = wrapper.env.step(act)
-            if isinstance(info, dict) and "dist_to_goal" not in info and hasattr(root, "evaluate"):
-                try:
-                    ev = root.evaluate()
-                    dg = ev.get("dist_to_goal")
-                    if dg is not None:
-                        info = {**info, "dist_to_goal": dg}
-                except Exception:
-                    pass
             try:
                 w = tcp_manipulability(robot)
                 manip_vals.append(float(np.mean(w)))
