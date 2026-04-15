@@ -1,8 +1,8 @@
 """
 Skill-agnostic scoring: TCP manipulability, obstacle clearance, task progress along a preview.
 
-Includes joint-space RRT+IK preview (lookahead_joint_rrt_score), MPPI reach preview
-(lookahead_reach_mppi_score), and generic policy rollouts (lookahead_rollout_score).
+Includes MPPI reach preview (lookahead_reach_mppi_score) and generic policy rollouts
+(lookahead_rollout_score, lookahead_rl_score).
 """
 from __future__ import annotations
 
@@ -11,16 +11,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
-from scipy.interpolate import CubicSpline
 
 _POLARIS_ROOT = Path(__file__).resolve().parent.parent
-
-# Joint limits — must match reach_mpc / historical RRT scripts
-JOINT_LOWER = np.array([-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973])
-JOINT_UPPER = np.array([2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973])
 _POLARIS_MANIP_CACHE_ATTR = "_polaris_tcp_manip_cache"
 
-# Must match skills/reach/reach_rrt.py:solve_ik (SAPIEN compact Pinocchio link index for panda_hand_tcp)
+# Panda hand TCP link index in SAPIEN compact Pinocchio model (matches reach_mpc).
 _DEFAULT_TCP_LINK_IDX = 10
 
 
@@ -113,7 +108,7 @@ def tcp_manipulability(
     fd_eps: float = 1e-4,
 ) -> np.ndarray:
 
-    del tcp_frame_name  # API compatibility; index fixed to match IK in reach_rrt
+    del tcp_frame_name  # API compatibility; TCP index fixed for Panda in SAPIEN Pinocchio model
 
     cache = _get_tcp_manip_cache(robot)
     pmodel, tcp_link_idx = cache.pmodel, cache.tcp_link_idx
@@ -135,143 +130,6 @@ def tcp_manipulability(
     return np.asarray(ws, dtype=np.float64)
 
 
-# ---------------------------------------------------------------------------
-# Joint-space RRT + IK (inlined; optional joint-path preview)
-# ---------------------------------------------------------------------------
-
-
-class RRTConnect:
-    """Bidirectional RRT-Connect in 7-DOF joint space (joint limits only)."""
-
-    def __init__(
-        self,
-        q_start: np.ndarray,
-        q_goal: np.ndarray,
-        max_iter: int = 2000,
-        step_size: float = 0.10,
-        goal_threshold: float = 0.05,
-    ):
-        self.q_start = q_start.copy()
-        self.q_goal = q_goal.copy()
-        self.max_iter = max_iter
-        self.step_size = step_size
-        self.goal_threshold = goal_threshold
-        self.nodes_s = [q_start.copy()]
-        self.parents_s = [-1]
-        self.nodes_g = [q_goal.copy()]
-        self.parents_g = [-1]
-
-    def _nearest(self, nodes: list, q: np.ndarray) -> int:
-        return int(np.argmin([np.linalg.norm(n - q) for n in nodes]))
-
-    def _steer(self, q_from: np.ndarray, q_to: np.ndarray) -> np.ndarray:
-        d = np.linalg.norm(q_to - q_from)
-        return q_to.copy() if d <= self.step_size else q_from + (q_to - q_from) / d * self.step_size
-
-    def _valid(self, q: np.ndarray) -> bool:
-        return bool(np.all((q >= JOINT_LOWER) & (q <= JOINT_UPPER)))
-
-    def _extend(self, nodes: list, parents: list, q_target: np.ndarray):
-        idx = self._nearest(nodes, q_target)
-        q_new = self._steer(nodes[idx], q_target)
-        if not self._valid(q_new):
-            return None, -1
-        nodes.append(q_new)
-        parents.append(idx)
-        return q_new, len(nodes) - 1
-
-    def _connect(self, nodes: list, parents: list, q_target: np.ndarray) -> bool:
-        while True:
-            q_new, _ = self._extend(nodes, parents, q_target)
-            if q_new is None:
-                return False
-            if np.linalg.norm(q_new - q_target) <= self.step_size:
-                return True
-
-    def _tree_path(self, nodes: list, parents: list, leaf_idx: int) -> list[np.ndarray]:
-        path, idx = [], leaf_idx
-        while idx != -1:
-            path.append(nodes[idx].copy())
-            idx = parents[idx]
-        return path[::-1]
-
-    def plan(self) -> list[np.ndarray]:
-        for i in range(self.max_iter):
-            q_rand = np.random.uniform(JOINT_LOWER, JOINT_UPPER)
-            if i % 2 == 0:
-                q_new, idx_new = self._extend(self.nodes_s, self.parents_s, q_rand)
-                if q_new is None:
-                    continue
-                if self._connect(self.nodes_g, self.parents_g, q_new):
-                    path_s = self._tree_path(self.nodes_s, self.parents_s, idx_new)
-                    path_g = self._tree_path(self.nodes_g, self.parents_g, len(self.nodes_g) - 1)
-                    return path_s + path_g[::-1]
-            else:
-                q_new, idx_new = self._extend(self.nodes_g, self.parents_g, q_rand)
-                if q_new is None:
-                    continue
-                if self._connect(self.nodes_s, self.parents_s, q_new):
-                    path_s = self._tree_path(self.nodes_s, self.parents_s, len(self.nodes_s) - 1)
-                    path_g = self._tree_path(self.nodes_g, self.parents_g, idx_new)
-                    return path_s + path_g[::-1]
-        idx_best = min(range(len(self.nodes_s)), key=lambda i: np.linalg.norm(self.nodes_s[i] - self.q_goal))
-        return self._tree_path(self.nodes_s, self.parents_s, idx_best)
-
-
-def smooth_path_spline(path: list[np.ndarray], num_points: int = 150) -> np.ndarray:
-    if len(path) < 2:
-        return np.array(path)
-    path_arr = np.array(path)
-    diffs = np.linalg.norm(np.diff(path_arr, axis=0), axis=1)
-    t = np.concatenate(([0.0], np.cumsum(diffs)))
-    if t[-1] > 0:
-        t /= t[-1]
-    cs = CubicSpline(t, path_arr, bc_type="clamped")
-    smooth = cs(np.linspace(0, 1, num_points))
-    return np.clip(smooth, JOINT_LOWER, JOINT_UPPER).astype(np.float32)
-
-
-def solve_ik(
-    root_env: Any,
-    goal_pos_world: np.ndarray,
-    q0: np.ndarray,
-    tol: float = 4e-4,
-    max_restarts: int = 50,
-) -> Optional[np.ndarray]:
-    import sapien
-
-    state = root_env.get_state_dict()
-    full_q0 = root_env.agent.robot.qpos.cpu().numpy().reshape(-1)
-    gripper_pad = full_q0[7:] if len(full_q0) > 7 else np.array([])
-    pmodel = root_env.agent.robot.create_pinocchio_model()
-    tcp_link_idx = 10
-    q_full_init = np.concatenate([q0, gripper_pad]).astype(np.float32)
-    pmodel.compute_forward_kinematics(q_full_init)
-    init_pose = pmodel.get_link_pose(tcp_link_idx)
-    target_pose = sapien.Pose(p=goal_pos_world, q=init_pose.q)
-    active_mask = np.zeros(len(full_q0), dtype=np.int32)
-    active_mask[:7] = 1
-    guesses = [q0] + [np.random.uniform(JOINT_LOWER, JOINT_UPPER).astype(np.float32) for _ in range(max_restarts)]
-    best_q, best_residual = None, float("inf")
-    for attempt, guess in enumerate(guesses):
-        q_full = np.concatenate([guess, gripper_pad]).astype(np.float32)
-        result_q, success, error = pmodel.compute_inverse_kinematics(
-            tcp_link_idx,
-            target_pose,
-            initial_qpos=q_full,
-            active_qmask=active_mask,
-            max_iterations=1000,
-        )
-        if success:
-            root_env.set_state_dict(state)
-            return np.clip(result_q[:7], JOINT_LOWER, JOINT_UPPER).astype(np.float32)
-        if error < best_residual:
-            best_residual = error
-            best_q = result_q[:7]
-    root_env.set_state_dict(state)
-    return None
-
-
 def _q_full_from_arm(robot: Any, q7: np.ndarray) -> np.ndarray:
     q_t = robot.qpos
     if hasattr(q_t, "detach"):
@@ -282,15 +140,6 @@ def _q_full_from_arm(robot: Any, q7: np.ndarray) -> np.ndarray:
     q7 = np.asarray(q7, dtype=np.float64).reshape(-1)
     q_full[: min(7, len(q_full))] = q7[: min(7, len(q_full))]
     return q_full
-
-
-def _manip_from_q7(robot: Any, q7: np.ndarray) -> float:
-    cache = _get_tcp_manip_cache(robot)
-    q_full = _q_full_from_arm(robot, q7)
-    J = _numerical_position_jacobian(
-        cache.pmodel, q_full, cache.tcp_link_idx, min(7, q_full.shape[0]), 1e-4
-    )
-    return float(_manip_from_linear_jacobian(J))
 
 
 def _tcp_from_q7(robot: Any, q7: np.ndarray) -> np.ndarray:
@@ -353,78 +202,6 @@ def weighted_reach_score(
     m_n, p_n, c_n = _normalize_triplet(manip_vals, clear_vals, dist_start, dist_end)
     s = w_manip * m_n + w_prog * p_n + w_clear * c_n
     return s, m_n, p_n, c_n
-
-
-def lookahead_planner_score(
-    root: Any,
-    robot: Any,
-    goal_pos: np.ndarray,
-    q_start: np.ndarray,
-    *,
-    preview_steps: int = 24,
-    w_manip: float = 1.0 / 3.0,
-    w_prog: float = 1.0 / 3.0,
-    w_clear: float = 1.0 / 3.0,
-    rrt_max_iter: int = 600,
-    rrt_step: float = 0.1,
-    rrt_goal_thr: float = 0.05,
-) -> Tuple[float, dict]:
-    """Joint-space RRT + IK preview (optional; legacy API name)."""
-    goal_pos = np.asarray(goal_pos, dtype=np.float64).reshape(3)
-    q_start = np.asarray(q_start, dtype=np.float32).reshape(-1)[:7]
-
-    rs = np.random.get_state()
-    try:
-        np.random.seed(0)
-        q_goal = solve_ik(root, goal_pos, q_start)
-        if q_goal is None:
-            return float("-inf"), {"reason": "ik_failed"}
-        planner = RRTConnect(
-            q_start,
-            q_goal,
-            max_iter=rrt_max_iter,
-            step_size=rrt_step,
-            goal_threshold=rrt_goal_thr,
-        )
-        path = planner.plan()
-        n_pts = max(preview_steps, min(150, len(path) * 15))
-        traj = np.asarray(smooth_path_spline(path, num_points=n_pts), dtype=np.float32)
-        if traj.ndim == 1:
-            traj = traj.reshape(1, -1)
-    finally:
-        np.random.set_state(rs)
-
-    k = min(preview_steps, int(traj.shape[0]))
-    if k < 1:
-        return float("-inf"), {"reason": "empty_traj"}
-
-    manip_vals: list[float] = []
-    clear_vals: list[float] = []
-    tcp0 = _tcp_from_q7(robot, traj[0])
-    dist_start = float(np.linalg.norm(tcp0 - goal_pos))
-    for i in range(k):
-        q = np.asarray(traj[i], dtype=np.float32).reshape(-1)[:7]
-        try:
-            manip_vals.append(_manip_from_q7(robot, q))
-        except Exception:
-            manip_vals.append(0.0)
-        tcp = _tcp_from_q7(robot, q)
-        clear_vals.append(_tcp_obstacle_clearance(root, tcp))
-    dist_end = float(np.linalg.norm(_tcp_from_q7(robot, traj[k - 1]) - goal_pos))
-
-    s, m_n, p_n, c_n = weighted_reach_score(
-        manip_vals, clear_vals, dist_start, dist_end, w_manip, w_prog, w_clear
-    )
-    return s, {"manip_norm": m_n, "progress_norm": p_n, "clearance_norm": c_n}
-
-
-def _info_dist(info: Any) -> float:
-    if not isinstance(info, dict):
-        return float("nan")
-    d = info.get("dist_to_goal")
-    if d is None:
-        return float("nan")
-    return float(np.asarray(d).reshape(-1)[0])
 
 
 def _dist_tcp_to_goal(obs: Dict[str, Any], goal_pos: np.ndarray) -> float:

@@ -7,7 +7,7 @@ Usage:
     python high_level_planner/executor.py --seed 42 --reach-checkpoint <run_name>
     python high_level_planner/executor.py --seed 42 --skill mpc
     python high_level_planner/executor.py --skill auto --reach-checkpoint <run_name>
-        # reach: compares lookahead_planner_score vs lookahead_rl_score (skills.metrics), then MPC or PPO
+        # reach: compares lookahead_reach_mppi_score vs lookahead_rl_score (skills.metrics), then MPC or PPO
 
 Checkpoint args accept either a full path or just a run name under checkpoints/{name}/final_ckpt.pt.
 """

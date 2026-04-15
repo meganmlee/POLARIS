@@ -13,7 +13,6 @@ if str(_POLARIS_ROOT) not in sys.path:
     sys.path.insert(0, str(_POLARIS_ROOT))
 
 from skills.metrics import (  # noqa: E402
-    lookahead_planner_score,
     lookahead_reach_mppi_score,
     lookahead_rl_score,
     lookahead_rollout_score,

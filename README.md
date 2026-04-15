@@ -195,7 +195,7 @@ python examples/pusho_obstacles_demo.py
 
 ## Planning Wrapper
 
-Planning backends (RRT, etc.) require branching and backtracking without a full simulator reset. The `planning_wrapper` package provides state cloning and restoration for any ManiSkill3 environment.
+Planning backends (MPC previews, rollouts, etc.) require branching and backtracking without a full simulator reset. The `planning_wrapper` package provides state cloning and restoration for any ManiSkill3 environment.
 
 ```python
 from planning_wrapper import ManiSkillPlanningWrapper

@@ -1,6 +1,5 @@
 from .maniskill_planning import (
     ManiSkillPlanningWrapper,
-    lookahead_planner_score,
     lookahead_reach_mppi_score,
     lookahead_rl_score,
     lookahead_rollout_score,
@@ -13,7 +12,6 @@ from .maniskill_planning import (
 
 __all__ = [
     "ManiSkillPlanningWrapper",
-    "lookahead_planner_score",
     "lookahead_reach_mppi_score",
     "lookahead_rl_score",
     "lookahead_rollout_score",
