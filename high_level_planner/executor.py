@@ -33,6 +33,8 @@ def _resolve_checkpoint(ckpt: str | None) -> str | None:
         return str(candidate)
     raise FileNotFoundError(f"Checkpoint not found: {ckpt!r} (tried {candidate})")
 
+import datetime
+
 import numpy as np
 import torch
 
@@ -163,6 +165,54 @@ def _push_o_ppo_policy_act(goal_xyz: np.ndarray, agent, env, device: str):
     return policy_act
 
 
+class _VideoRecorder:
+    """Wraps a gym env and captures an rgb_array frame after every step/reset."""
+
+    def __init__(self, env, video_path: str):
+        self._env = env
+        self._video_path = video_path
+        self._frames: list = []
+
+    def __getattr__(self, name):
+        return getattr(self._env, name)
+
+    def _capture(self):
+        frame = self._env.render()
+        if frame is None:
+            return
+        if isinstance(frame, torch.Tensor):
+            frame = frame.cpu().numpy()
+        f = np.asarray(frame)
+        if f.ndim == 4:  # ManiSkill batched: (N, H, W, C) → take first
+            f = f[0]
+        self._frames.append(f.copy())
+
+    def step(self, action):
+        result = self._env.step(action)
+        self._capture()
+        return result
+
+    def reset(self, **kwargs):
+        result = self._env.reset(**kwargs)
+        self._capture()
+        return result
+
+    def close(self):
+        self._env.close()
+
+    def save_video(self):
+        if not self._frames:
+            print("[video] No frames captured — nothing saved.")
+            return
+        try:
+            import imageio
+        except ImportError:
+            raise ImportError("imageio is required for video capture: pip install imageio[ffmpeg]")
+        Path(self._video_path).parent.mkdir(parents=True, exist_ok=True)
+        imageio.mimwrite(self._video_path, self._frames, fps=20)
+        print(f"[video] Saved {len(self._frames)} frames → {self._video_path}")
+
+
 def run(
     seed: int = 0,
     max_replans: int = 10,
@@ -177,21 +227,41 @@ def run(
     push_cube_checkpoint: str | None = None,
     push_o_checkpoint: str | None = None,
     reach_device: str | None = None,
+    capture_video: bool = False,
+    video_dir: str = "./videos",
 ):
     control_mode = "pd_ee_delta_pose"
     dev = reach_device or ("cuda" if torch.cuda.is_available() else "cpu")
     skill_agents: dict = {"reach": None, "pick": None, "place": None, "push_cube": None, "push_o": None}
+
+    # render_mode: rgb_array for video capture, human for live viewer, else None
+    if capture_video:
+        render_mode = "rgb_array"
+        effective_render = False  # no separate viewer window when recording
+    elif render:
+        render_mode = "human"
+        effective_render = True
+    else:
+        render_mode = None
+        effective_render = False
+
     env = gym.make(
         env_id,
         num_envs=1,
         obs_mode="state_dict",
         control_mode=control_mode,
         sim_backend="physx_cpu",
-        render_mode="human" if render else None,
+        render_mode=render_mode,
     )
-    if render:
+    if effective_render:
         _orig_render = env.render
         env.render = lambda *a, **kw: (_orig_render(*a, **kw), time.sleep(0.05))[0]
+
+    if capture_video:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        video_path = str(Path(video_dir) / f"run_seed{seed}_{timestamp}.mp4")
+        env = _VideoRecorder(env, video_path)
+        print(f"[video] Recording to {video_path}")
 
     wrapper = ManiSkillPlanningWrapper(env, adapter=PushOTaskAdapter())
     obs, _ = wrapper.reset(seed=seed)
@@ -243,19 +313,19 @@ def run(
                         f"ppo_score={rs:.4f} {ri} → backend={choice}"
                     )
                     if choice == "planner":
-                        success, obs = mpc_execute(env, obs, goal_xyz, render=render)
+                        success, obs = mpc_execute(env, obs, goal_xyz, render=effective_render)
                     else:
                         success, obs = ppo_execute(
-                            env, obs, goal_xyz, checkpoint=checkpoint, render=render, device=dev, agent=rag
+                            env, obs, goal_xyz, checkpoint=checkpoint, render=effective_render, device=dev, agent=rag
                         )
                 elif skill == "ppo":
                     if skill_agents["reach"] is None:
                         skill_agents["reach"] = load_agent(checkpoint, dev)
                     success, obs = ppo_execute(
-                        env, obs, goal_xyz, checkpoint=checkpoint, render=render, device=dev, agent=skill_agents["reach"]
+                        env, obs, goal_xyz, checkpoint=checkpoint, render=effective_render, device=dev, agent=skill_agents["reach"]
                     )
                 else:
-                    success, obs = mpc_execute(env, obs, goal_xyz, render=render)
+                    success, obs = mpc_execute(env, obs, goal_xyz, render=effective_render)
 
                 print(f"    → {'OK' if success else 'FAIL'}")
                 if not success:
@@ -295,10 +365,10 @@ def run(
                         f"    [metrics] mpc_score={ms:.4f} {mi} | ppo_score={rs:.4f} {ri} → backend={choice}"
                     )
                     if choice == "planner":
-                        success, obs = pick_mpc_execute(env, obs, block_idx, render=render)
+                        success, obs = pick_mpc_execute(env, obs, block_idx, render=effective_render)
                     else:
                         success, obs = pick_ppo_execute(
-                            env, obs, block_idx, checkpoint=pick_checkpoint, render=render, device=dev, agent=skill_agents["pick"]
+                            env, obs, block_idx, checkpoint=pick_checkpoint, render=effective_render, device=dev, agent=skill_agents["pick"]
                         )
                 elif skill == "ppo":
                     if pick_checkpoint is None:
@@ -308,11 +378,11 @@ def run(
                     if skill_agents["pick"] is None:
                         skill_agents["pick"] = load_agent(pick_checkpoint, dev)
                     success, obs = pick_ppo_execute(
-                        env, obs, block_idx, checkpoint=pick_checkpoint, render=render, device=dev, agent=skill_agents["pick"]
+                        env, obs, block_idx, checkpoint=pick_checkpoint, render=effective_render, device=dev, agent=skill_agents["pick"]
                     )
                 else:
                     success, obs = pick_mpc_execute(
-                        env, obs, block_idx, render=render
+                        env, obs, block_idx, render=effective_render
                     )
 
                 print(f"    → {'OK' if success else 'FAIL'}")
@@ -355,10 +425,10 @@ def run(
                         f"    [metrics] mpc_score={ms:.4f} {mi} | ppo_score={rs:.4f} {ri} → backend={choice}"
                     )
                     if choice == "planner":
-                        success, obs = place_mpc_execute(env, obs, block_idx, goal_xyz, render=render)
+                        success, obs = place_mpc_execute(env, obs, block_idx, goal_xyz, render=effective_render)
                     else:
                         success, obs = place_ppo_execute(
-                            env, obs, block_idx, goal_xyz, checkpoint=place_checkpoint, render=render, device=dev, agent=skill_agents["place"]
+                            env, obs, block_idx, goal_xyz, checkpoint=place_checkpoint, render=effective_render, device=dev, agent=skill_agents["place"]
                         )
                 elif skill == "ppo":
                     if place_checkpoint is None:
@@ -368,11 +438,11 @@ def run(
                     if skill_agents["place"] is None:
                         skill_agents["place"] = load_agent(place_checkpoint, dev)
                     success, obs = place_ppo_execute(
-                        env, obs, block_idx, goal_xyz, checkpoint=place_checkpoint, render=render, device=dev, agent=skill_agents["place"]
+                        env, obs, block_idx, goal_xyz, checkpoint=place_checkpoint, render=effective_render, device=dev, agent=skill_agents["place"]
                     )
                 else:
                     success, obs = place_mpc_execute(
-                        env, obs, block_idx, goal_xyz, render=render
+                        env, obs, block_idx, goal_xyz, render=effective_render
                     )
                 print(f"    → {'OK' if success else 'FAIL'}")
                 if not success:
@@ -414,10 +484,10 @@ def run(
                         f"    [metrics] mpc_score={ms:.4f} {mi} | ppo_score={rs:.4f} {ri} → backend={choice}"
                     )
                     if choice == "planner":
-                        success, obs = push_cube_mpc_execute(env, obs, block_idx, goal_xyz, render=render)
+                        success, obs = push_cube_mpc_execute(env, obs, block_idx, goal_xyz, render=effective_render)
                     else:
                         success, obs = push_cube_ppo_execute(
-                            env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=render, device=dev, agent=skill_agents["push_cube"]
+                            env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=effective_render, device=dev, agent=skill_agents["push_cube"]
                         )
                 elif skill == "ppo":
                     if push_cube_checkpoint is None:
@@ -427,11 +497,11 @@ def run(
                     if skill_agents["push_cube"] is None:
                         skill_agents["push_cube"] = load_agent(push_cube_checkpoint, dev)
                     success, obs = push_cube_ppo_execute(
-                        env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=render, device=dev, agent=skill_agents["push_cube"]
+                        env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=effective_render, device=dev, agent=skill_agents["push_cube"]
                     )
                 else:
                     success, obs = push_cube_mpc_execute(
-                        env, obs, block_idx, goal_xyz, render=render
+                        env, obs, block_idx, goal_xyz, render=effective_render
                     )
                 print(f"    → {'OK' if success else 'FAIL'}")
                 if not success:
@@ -466,11 +536,11 @@ def run(
                         f"    [metrics] push_disk: PPO-only (no MPC skill) preview_score={rs:.4f} {ri}"
                     )
                     success, obs = push_o_ppo_execute(
-                        env, obs, goal_xyz, checkpoint=push_o_checkpoint, render=render, device=dev, agent=skill_agents["push_o"]
+                        env, obs, goal_xyz, checkpoint=push_o_checkpoint, render=effective_render, device=dev, agent=skill_agents["push_o"]
                     )
                 else:
                     success, obs = push_o_ppo_execute(
-                        env, obs, goal_xyz, checkpoint=push_o_checkpoint, render=render, device=dev
+                        env, obs, goal_xyz, checkpoint=push_o_checkpoint, render=effective_render, device=dev
                     )
                 print(f"    → {'OK' if success else 'FAIL'}")
                 if not success:
@@ -486,6 +556,8 @@ def run(
             print("All subgoals executed successfully.")
             break
 
+    if capture_video:
+        env.save_video()
     wrapper.close()
 
 
@@ -510,6 +582,10 @@ if __name__ == "__main__":
                     help="Push-cube skill PPO checkpoint")
     ap.add_argument("--push-o-checkpoint", default="PushO", dest="push_o_checkpoint",
                     help="Push-O skill PPO checkpoint")
+    ap.add_argument("--capture-video",     action="store_true", dest="capture_video",
+                    help="Record the entire run and save as an MP4")
+    ap.add_argument("--video-dir",         default="./videos", dest="video_dir",
+                    help="Directory to save recorded video (default: ./videos)")
     args = ap.parse_args()
     if args.skill in ("ppo", "auto") and args.reach_checkpoint is None:
         ap.error("--reach-checkpoint is required when using --skill ppo or auto")
@@ -526,5 +602,7 @@ if __name__ == "__main__":
         place_checkpoint=_resolve_checkpoint(args.place_checkpoint),
         push_cube_checkpoint=_resolve_checkpoint(args.push_cube_checkpoint),
         push_o_checkpoint=_resolve_checkpoint(args.push_o_checkpoint),
+        capture_video=args.capture_video,
+        video_dir=args.video_dir,
     )
 
