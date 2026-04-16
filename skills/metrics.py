@@ -174,7 +174,7 @@ def _normalize_triplet(
     dist_start: float,
     dist_end: float,
     *,
-    manip_scale: float = 0.05,
+    manip_scale: float = 0.25,
     clear_scale: float = 0.25,
 ) -> Tuple[float, float, float]:
     if not manip_vals:
@@ -190,15 +190,43 @@ def _normalize_triplet(
     return m_n, p_n, c_n
 
 
+def _dynamic_weights(
+    manip_vals: list[float],
+    clear_vals: list[float],
+    dist_start: float,
+    dist_end: float,
+    *,
+    manip_scale: float = 0.25,
+    clear_scale: float = 0.25,
+) -> Tuple[float, float, float]:
+    """
+    Compute per-rollout weights from the raw metric values:
+      w_prog  ∝ dist_end / dist_start   — high when still far from goal
+      w_clear ∝ 1 / (mean_clear + ε)   — high when near an obstacle
+      w_manip ∝ 1 / (mean_manip + ε)   — high when near a singularity
+    Returns (w_manip, w_prog, w_clear) normalised to sum to 1.
+    """
+    ds = max(float(dist_start), 1e-9)
+    dist_frac = float(np.clip(dist_end / ds, 0.0, 1.0))
+
+    mean_manip = float(np.mean(manip_vals)) if manip_vals else 0.0
+    mean_clear = float(np.mean(clear_vals)) if clear_vals else 0.0
+
+    w_p = max(dist_frac, 1e-3)
+    w_c = 1.0 / (mean_clear / clear_scale + 0.1)
+    w_m = 1.0 / (mean_manip / manip_scale + 0.1)
+
+    total = w_p + w_c + w_m
+    return w_m / total, w_p / total, w_c / total
+
+
 def weighted_reach_score(
     manip_vals: list[float],
     clear_vals: list[float],
     dist_start: float,
     dist_end: float,
-    w_manip: float,
-    w_prog: float,
-    w_clear: float,
 ) -> Tuple[float, float, float, float]:
+    w_manip, w_prog, w_clear = _dynamic_weights(manip_vals, clear_vals, dist_start, dist_end)
     m_n, p_n, c_n = _normalize_triplet(manip_vals, clear_vals, dist_start, dist_end)
     s = w_manip * m_n + w_prog * p_n + w_clear * c_n
     return s, m_n, p_n, c_n
@@ -225,9 +253,6 @@ def lookahead_rollout_score(
     progress_fn: Callable[[Dict[str, Any], Optional[Dict[str, Any]]], float],
     *,
     preview_steps: int = 24,
-    w_manip: float = 1.0 / 3.0,
-    w_prog: float = 1.0 / 3.0,
-    w_clear: float = 1.0 / 3.0,
     dist_start_override: Optional[float] = None,
     goal_pos_for_fallback: Optional[np.ndarray] = None,
 ) -> Tuple[float, dict]:
@@ -293,7 +318,7 @@ def lookahead_rollout_score(
         wrapper.restore_state(snapshot)
 
     s, m_n, p_n, c_n = weighted_reach_score(
-        manip_vals, clear_vals, dist_start, dist_end, w_manip, w_prog, w_clear
+        manip_vals, clear_vals, dist_start, dist_end
     )
     return s, {"manip_norm": m_n, "progress_norm": p_n, "clearance_norm": c_n}
 
@@ -305,9 +330,6 @@ def lookahead_rl_score(
     obs: Dict[str, Any],
     *,
     preview_steps: int = 24,
-    w_manip: float = 1.0 / 3.0,
-    w_prog: float = 1.0 / 3.0,
-    w_clear: float = 1.0 / 3.0,
     dist_start_override: Optional[float] = None,
 ) -> Tuple[float, dict]:
     gp = np.asarray(goal_pos, dtype=np.float64).reshape(3)
@@ -325,9 +347,6 @@ def lookahead_rl_score(
         obs,
         _prog,
         preview_steps=preview_steps,
-        w_manip=w_manip,
-        w_prog=w_prog,
-        w_clear=w_clear,
         dist_start_override=dist_start_override,
         goal_pos_for_fallback=gp,
     )
@@ -339,9 +358,6 @@ def lookahead_reach_mppi_score(
     goal_pos: np.ndarray,
     *,
     preview_steps: int = 24,
-    w_manip: float = 1.0 / 3.0,
-    w_prog: float = 1.0 / 3.0,
-    w_clear: float = 1.0 / 3.0,
     **mppi_kwargs: Any,
 ) -> Tuple[float, dict]:
     """MPPI reach preview — uses `reach_mpc.ReachMPPI` (same as `reach_mpc.execute`)."""
@@ -381,9 +397,6 @@ def lookahead_reach_mppi_score(
         obs,
         _prog,
         preview_steps=preview_steps,
-        w_manip=w_manip,
-        w_prog=w_prog,
-        w_clear=w_clear,
         goal_pos_for_fallback=gp,
     )
 

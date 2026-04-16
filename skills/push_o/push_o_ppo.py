@@ -171,7 +171,7 @@ def execute(
     action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
     action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
 
-    SUCCESS_OVERLAP = 0.90
+    SUCCESS_OVERLAP = 0.80
 
     current_obs = obs
     for _ in range(max_steps):
