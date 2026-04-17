@@ -2,6 +2,10 @@
 ; PDDL domain: PushO with obstacles (tabletop manipulation)
 ; =============================================================================
 ; TABLE: Grid of regions r_m_n (m=row, n=column). Goal = one of these regions.
+; DISK SIZE: The disk is ~3x the diameter of an obstacle cube (~1.5-tile radius).
+;   push_disk requires not just the destination cell to be (clear ?to), but ALL cells
+;   within 1 tile of the entire disk path to be free. Clear every obstacle adjacent to
+;   the planned push_disk corridor BEFORE executing push_disk steps.
 ; OBSTACLES: 10 obstacle cubes (obstacle0..obstacle9). Each obstacle has a SIZE relative to
 ;   the gripper/end-effector:
 ;   - (pickable ?b): obstacle is SMALLER than gripper → use PICK and PLACE to move

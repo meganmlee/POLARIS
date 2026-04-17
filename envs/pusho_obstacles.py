@@ -487,10 +487,39 @@ class PushOWallObstaclesEnv(PushOWithObstaclesEnv):
     _TABLE_BOUND: float = 0.30
     _GRID: int = 10
 
+    # (disk_xy, goal_xy) in world metres. Computed via region_to_xy().
+    PRESETS: dict = {
+        #              disk (x, y)          goal (x, y)
+        "cross_center": ((-0.06, -0.21),  ( 0.06,  0.21)),
+        "same_side":    ((-0.09, -0.15),  ( 0.15, -0.21)),
+    }
+
+    # Set to a key from PRESETS to fix positions; None → random (default).
+    preset: str | None = "cross_center" #"same_side"
+
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         # Let PushOWithObstaclesEnv set up disk, goal, robot positions first,
         # then immediately reposition every obstacle into the wall.
         super()._initialize_episode(env_idx, options)
+
+        if self.preset is not None:
+            disk_xy_val, goal_xy_val = self.PRESETS[self.preset]
+            with torch.device(self.device):
+                b = len(env_idx)
+                q = torch.tensor(_DISK_QUAT, device=self.device).unsqueeze(0).expand(b, 4)
+
+                goal_xy = torch.tensor(list(goal_xy_val), device=self.device).unsqueeze(0).expand(b, 2)
+                goal_z  = torch.full((b, 1), self.disk_half_thickness * 0.4, device=self.device)
+                self.goal_pos[env_idx] = torch.cat([goal_xy, goal_z], dim=1)
+                self.goal_site.set_pose(Pose.create_from_pq(
+                    p=self.goal_pos[env_idx], q=q,
+                ))
+
+                disk_xy = torch.tensor(list(disk_xy_val), device=self.device).unsqueeze(0).expand(b, 2)
+                disk_z  = torch.full((b, 1), self.disk_half_thickness, device=self.device)
+                self.disk.set_pose(Pose.create_from_pq(
+                    p=torch.cat([disk_xy, disk_z], dim=1), q=q,
+                ))
         with torch.device(self.device):
             b = len(env_idx)
             q_id = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0)

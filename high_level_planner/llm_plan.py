@@ -136,7 +136,8 @@ def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray
         init.append(f"(adjacent {_region_to_name(a)} {_region_to_name(b)})")
     goal = f"(object-at disk {_region_to_name(rg)})"
     path_disk_to_goal_cells = set(_bfs_path(rd, rg, set()))
-    obstacles_on_path = [i for i in range(n_obstacles) if obstacles[i] in path_disk_to_goal_cells]
+    disk_zone = _expand_cells_by_1(path_disk_to_goal_cells)
+    obstacles_on_path = [i for i in range(n_obstacles) if obstacles[i] in disk_zone]
     obstacle_list = ", ".join(f"obstacle{i}@{_region_to_name(obstacles[i])}" for i in range(n_obstacles))
     on_path_str = (
         f" Obstacles ON THE PATH (clear first): " + ", ".join(f"obstacle{i} at {_region_to_name(obstacles[i])}" for i in obstacles_on_path) + "."
@@ -193,6 +194,16 @@ def _adjacency():
     return adj
 
 
+def _expand_cells_by_1(cells: set) -> set:
+    """Return cells plus all their cardinal neighbors (disk ~3x3 needs 1-cell clearance)."""
+    adj = _adjacency()
+    expanded = set(cells)
+    for cell in cells:
+        for n in adj[cell]:
+            expanded.add(n)
+    return expanded
+
+
 def _bfs_path(start: int, goal: int, blocked: set) -> list:
     from collections import deque
 
@@ -232,17 +243,17 @@ def _clear_path_subgoals(disk_r: int, goal_r: int, blocked: set, problem_str: st
         return []
 
     path_cells = set(direct_path)
+    disk_zone = _expand_cells_by_1(path_cells)  # disk ~3x3: clear 1 cell around each path node
     positions, pickable, push_only = _parse_obstacle_info(problem_str)
     adj = _adjacency()
 
     subgoals = []
     for obstacle_name, obstacle_region in positions.items():
-        if obstacle_region not in path_cells:
+        if obstacle_region not in disk_zone:
             continue
 
         # BFS outward from the obstacle to find the nearest cell that is
-        # off-path, unblocked, and at least 2 steps away (so the dropped
-        # cube won't immediately re-block the path or sit in the wall).
+        # outside the disk zone, unblocked, and at least 2 steps away.
         drop = None
         seen_drop = {obstacle_region}
         frontier = [(obstacle_region, 0)]
@@ -252,7 +263,7 @@ def _clear_path_subgoals(disk_r: int, goal_r: int, blocked: set, problem_str: st
                 if n in seen_drop:
                     continue
                 seen_drop.add(n)
-                if n not in blocked and n not in path_cells and depth + 1 >= 2:
+                if n not in blocked and n not in disk_zone and depth + 1 >= 2:
                     drop = n
                     break
                 frontier.append((n, depth + 1))
@@ -279,8 +290,9 @@ def _clear_path_subgoals(disk_r: int, goal_r: int, blocked: set, problem_str: st
 
 def compute_subgoals(problem_str: str) -> list[dict]:
     disk_r, goal_r, robot_r, blocked = _parse_problem_regions(problem_str)
+    disk_blocked = _expand_cells_by_1(blocked)  # disk ~3x3: block cells adjacent to any obstacle
     path_robot_to_disk = _bfs_path(robot_r, disk_r, blocked)
-    path_disk_to_goal  = _bfs_path(disk_r, goal_r, blocked)
+    path_disk_to_goal  = _bfs_path(disk_r, goal_r, disk_blocked)
     subgoals = []
     if path_robot_to_disk and path_robot_to_disk[-1] == disk_r:
         subgoals.append({"skill": "reach", "state": f"(robot-at robot1 {_region_to_name(disk_r)})"})
@@ -288,12 +300,13 @@ def compute_subgoals(problem_str: str) -> list[dict]:
         for i in range(1, len(path_disk_to_goal)):
             subgoals.append({"skill": "push_disk", "state": f"(object-at disk {_region_to_name(path_disk_to_goal[i])})"})
     else:
-        # All routes blocked — emit clearing subgoals for blocks on the direct path,
+        # All routes blocked — emit clearing subgoals for blocks near the direct path,
         # then append push_disk steps using a BFS path with those blocks removed.
         subgoals.extend(_clear_path_subgoals(disk_r, goal_r, blocked, problem_str))
         direct_path = _bfs_path(disk_r, goal_r, set())
-        cleared_cells = set(direct_path) & blocked
-        new_path = _bfs_path(disk_r, goal_r, blocked - cleared_cells)
+        direct_zone = _expand_cells_by_1(set(direct_path))
+        cleared_cells = {c for c in blocked if c in direct_zone}
+        new_path = _bfs_path(disk_r, goal_r, _expand_cells_by_1(blocked - cleared_cells))
         if new_path and len(new_path) >= 2:
             subgoals.append({"skill": "reach", "state": f"(robot-at robot1 {_region_to_name(disk_r)})"})
             for i in range(1, len(new_path)):
@@ -305,7 +318,7 @@ def compute_subgoals(problem_str: str) -> list[dict]:
 
 def _push_disk_subgoals_only(problem_str: str) -> list[dict]:
     disk_r, goal_r, _, blocked = _parse_problem_regions(problem_str)
-    path = _bfs_path(disk_r, goal_r, blocked)
+    path = _bfs_path(disk_r, goal_r, _expand_cells_by_1(blocked))
     if len(path) < 2:
         return []
     return [{"skill": "push_disk", "state": f"(object-at disk {_region_to_name(path[i])})"} for i in range(1, len(path))]
@@ -400,11 +413,12 @@ def _goal_region_from_problem(problem_str: str) -> str | None:
 
 def _build_subgoal_prompt(domain: str, problem_str: str) -> str:
     goal_region = _goal_region_from_problem(problem_str) or "r_0_0"
-    return f"""You decompose this Push-O task into ordered logical subgoals (milestones). The movable object is an O-shaped disk (circular puck), not a T-piece; PDDL uses the constant `disk` for it.
+    return f"""You decompose this Push-O task into ordered logical subgoals (milestones). The movable object is an O-shaped disk (circular puck); PDDL uses the constant `disk` for it.
 Each line is one milestone: the SKILL that achieves it, then TAB, then the target state as ONE PDDL atom in parentheses.
 
 Rules:
 - Order matters: earlier lines must be achievable before later ones.
+- The disk is ~3x the diameter of an obstacle cube (~1.5-tile radius). push_disk requires not just the destination cell to be (clear ?to), but ALL cells within 1 tile of the entire disk path to be free. For example, if the disk is going to r_4_4, all obstacles between r_3_3 and r_5_5 could block it.
 - End with: push_disk	(object-at disk {goal_region})
 - Before that push chain: if obstacles block the path, clear them (pick/place or push_cube), then reach to the disk's cell, then many push_disk steps (one grid cell per push_disk toward {goal_region}).
 - Skills: reach, push_disk, pick, place, push_cube. States: (robot-at robot1 r_i_j), (object-at disk r_i_j), (holding robot1 obstacleN), (obstacle-at obstacleN r_i_j). Never use tee or push_tee — only disk and push_disk.
