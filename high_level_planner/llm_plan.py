@@ -59,6 +59,30 @@ def region_to_xy(name: str) -> tuple[float, float]:
     return float(x), float(y)
 
 
+def place_fallback_candidates(region: str, n: int = 4) -> list[str]:
+    """Alternative placement regions when the primary target fails.
+
+    Walks outward from *region* in steps of 2, 3, … tiles along the four
+    cardinal directions so retries are spread across the table rather than
+    clustered in neighbouring cells.  The original region is excluded.
+    """
+    m = re.match(r"r_(\d+)_(\d+)", region.strip())
+    if not m:
+        return []
+    row, col = int(m.group(1)), int(m.group(2))
+    candidates: list[str] = []
+    for dist in range(2, GRID):
+        for dr, dc in [(0, dist), (0, -dist), (dist, 0), (-dist, 0)]:
+            nr, nc = row + dr, col + dc
+            if 0 <= nr < GRID and 0 <= nc < GRID:
+                name = f"r_{nr}_{nc}"
+                if name not in candidates:
+                    candidates.append(name)
+        if len(candidates) >= n:
+            break
+    return candidates[:n]
+
+
 def _adjacent_pairs():
     out = []
     for i in range(GRID):
