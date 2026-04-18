@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.join(_ROOT, "skills"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "reach"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "pick"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "place"))
-sys.path.insert(0, os.path.join(_ROOT, "skills", "push_cube"))
+# sys.path.insert(0, os.path.join(_ROOT, "skills", "push_cube"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "push_o"))
 
 import envs  # noqa: F401 — registers ManiSkill envs
@@ -69,8 +69,8 @@ from pick_cube_ppo import _build_pick_obs, execute as pick_ppo_execute
 from pick_cube_mpc import PickMPCPreviewSession, execute as pick_mpc_execute
 from place_cube_ppo import _build_place_obs, execute as place_ppo_execute
 from place_cube_mpc import PlaceMPCPreviewSession, execute as place_mpc_execute
-from push_cube_ppo import _build_push_cube_obs, execute as push_cube_ppo_execute
-from push_cube_mpc import PushCubeMPCPreviewSession, execute as push_cube_mpc_execute
+# from push_cube_ppo import _build_push_cube_obs, execute as push_cube_ppo_execute
+# from push_cube_mpc import PushCubeMPCPreviewSession, execute as push_cube_mpc_execute
 from push_o_ppo import execute as push_o_ppo_execute
 from push_o_mpc import PushOMPCPreviewSession, execute as push_o_mpc_execute
 
@@ -139,20 +139,20 @@ def _place_ppo_policy_act(block_idx: int, goal_xyz: np.ndarray, agent, env, devi
     return policy_act
 
 
-def _push_cube_ppo_policy_act(block_idx: int, goal_xyz: np.ndarray, agent, env, device: str):
-    raw = env.unwrapped
-    obstacle = raw.obstacles[block_idx]
-    g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
-    action_low = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
-    action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
+# def _push_cube_ppo_policy_act(block_idx: int, goal_xyz: np.ndarray, agent, env, device: str):
+#     raw = env.unwrapped
+#     obstacle = raw.obstacles[block_idx]
+#     g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
+#     action_low = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
+#     action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
 
-    def policy_act(obs):
-        flat = _build_push_cube_obs(obs, raw, obstacle, g)
-        obs_t = torch.from_numpy(flat).float().unsqueeze(0).to(device)
-        with torch.no_grad():
-            return torch.clamp(agent.get_action(obs_t, deterministic=True), action_low, action_high)
+#     def policy_act(obs):
+#         flat = _build_push_cube_obs(obs, raw, obstacle, g)
+#         obs_t = torch.from_numpy(flat).float().unsqueeze(0).to(device)
+#         with torch.no_grad():
+#             return torch.clamp(agent.get_action(obs_t, deterministic=True), action_low, action_high)
 
-    return policy_act
+#     return policy_act
 
 
 def _push_o_ppo_policy_act(goal_xyz: np.ndarray, agent, env, device: str):
@@ -231,7 +231,7 @@ def run(
     checkpoint: str | None = None,
     pick_checkpoint: str | None = None,
     place_checkpoint: str | None = None,
-    push_cube_checkpoint: str | None = None,
+    # push_cube_checkpoint: str | None = None,
     push_o_checkpoint: str | None = None,
     reach_device: str | None = None,
     capture_video: bool = False,
@@ -466,62 +466,65 @@ def run(
                         obs, _, _, _, _ = env.step(open_action)
 
             elif sg_skill == "push_cube":
-                if block_idx is None or region is None:
-                    print(f"    [WARN] could not parse block/region from: {state!r}")
-                    skill_failed = True
-                    break
-                x, y = region_to_xy(region)
-                goal_xyz = np.array([x, y, 0.0], dtype=np.float32)
-                print(f"    → push_cube obstacle{block_idx} to {np.round(goal_xyz, 3)}")
+                print("    [SKIP] push_cube skill disabled — re-planning")
+                skill_failed = True
+                break
+                # if block_idx is None or region is None:
+                #     print(f"    [WARN] could not parse block/region from: {state!r}")
+                #     skill_failed = True
+                #     break
+                # x, y = region_to_xy(region)
+                # goal_xyz = np.array([x, y, 0.0], dtype=np.float32)
+                # print(f"    → push_cube obstacle{block_idx} to {np.round(goal_xyz, 3)}")
 
-                if skill == "auto":
-                    if push_cube_checkpoint is None:
-                        print("    [SKIP] push_cube: no --push-cube-checkpoint provided — re-planning")
-                        skill_failed = True
-                        break
-                    if skill_agents["push_cube"] is None:
-                        skill_agents["push_cube"] = load_agent(push_cube_checkpoint, dev)
-                    g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
-                    raw_e = env.unwrapped
+                # if skill == "auto":
+                #     if push_cube_checkpoint is None:
+                #         print("    [SKIP] push_cube: no --push-cube-checkpoint provided — re-planning")
+                #         skill_failed = True
+                #         break
+                #     if skill_agents["push_cube"] is None:
+                #         skill_agents["push_cube"] = load_agent(push_cube_checkpoint, dev)
+                #     g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
+                #     raw_e = env.unwrapped
 
-                    def _pc_prog(o, inf):
-                        cube = raw_e.obstacles[block_idx].pose.p.cpu().numpy().reshape(3)
-                        return float(np.linalg.norm(cube[:2] - g[:2]))
+                #     def _pc_prog(o, inf):
+                #         cube = raw_e.obstacles[block_idx].pose.p.cpu().numpy().reshape(3)
+                #         return float(np.linalg.norm(cube[:2] - g[:2]))
 
-                    mpc_sess = PushCubeMPCPreviewSession(env, block_idx, goal_xyz)
-                    mpc_sess.reset()
-                    ms, mi = lookahead_rollout_score(
-                        wrapper, lambda o: mpc_sess.step_action(o), obs, _pc_prog
-                    )
-                    ppo_act = _push_cube_ppo_policy_act(block_idx, goal_xyz, skill_agents["push_cube"], env, dev)
-                    rs, ri = lookahead_rollout_score(wrapper, ppo_act, obs, _pc_prog)
-                    choice = select_reach_backend(ms, rs)
-                    method = "push_cube_mpc" if choice == "planner" else "push_cube_ppo"
-                    print(f"    [metrics] mpc={ms:.3f} {_fmt_m(mi)} | ppo={rs:.3f} {_fmt_m(ri)} → {method}")
-                    if choice == "planner":
-                        success, obs = push_cube_mpc_execute(env, obs, block_idx, goal_xyz, render=effective_render)
-                    else:
-                        success, obs = push_cube_ppo_execute(
-                            env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=effective_render, device=dev, agent=skill_agents["push_cube"]
-                        )
-                elif skill == "ppo":
-                    if push_cube_checkpoint is None:
-                        print("    [SKIP] push_cube: no --push-cube-checkpoint provided — re-planning")
-                        skill_failed = True
-                        break
-                    if skill_agents["push_cube"] is None:
-                        skill_agents["push_cube"] = load_agent(push_cube_checkpoint, dev)
-                    success, obs = push_cube_ppo_execute(
-                        env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=effective_render, device=dev, agent=skill_agents["push_cube"]
-                    )
-                else:
-                    success, obs = push_cube_mpc_execute(
-                        env, obs, block_idx, goal_xyz, render=effective_render
-                    )
-                print(f"    → {'OK' if success else 'FAIL'}")
-                if not success:
-                    skill_failed = True
-                    break
+                #     mpc_sess = PushCubeMPCPreviewSession(env, block_idx, goal_xyz)
+                #     mpc_sess.reset()
+                #     ms, mi = lookahead_rollout_score(
+                #         wrapper, lambda o: mpc_sess.step_action(o), obs, _pc_prog
+                #     )
+                #     ppo_act = _push_cube_ppo_policy_act(block_idx, goal_xyz, skill_agents["push_cube"], env, dev)
+                #     rs, ri = lookahead_rollout_score(wrapper, ppo_act, obs, _pc_prog)
+                #     choice = select_reach_backend(ms, rs)
+                #     method = "push_cube_mpc" if choice == "planner" else "push_cube_ppo"
+                #     print(f"    [metrics] mpc={ms:.3f} {_fmt_m(mi)} | ppo={rs:.3f} {_fmt_m(ri)} → {method}")
+                #     if choice == "planner":
+                #         success, obs = push_cube_mpc_execute(env, obs, block_idx, goal_xyz, render=effective_render)
+                #     else:
+                #         success, obs = push_cube_ppo_execute(
+                #             env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=effective_render, device=dev, agent=skill_agents["push_cube"]
+                #         )
+                # elif skill == "ppo":
+                #     if push_cube_checkpoint is None:
+                #         print("    [SKIP] push_cube: no --push-cube-checkpoint provided — re-planning")
+                #         skill_failed = True
+                #         break
+                #     if skill_agents["push_cube"] is None:
+                #         skill_agents["push_cube"] = load_agent(push_cube_checkpoint, dev)
+                #     success, obs = push_cube_ppo_execute(
+                #         env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=effective_render, device=dev, agent=skill_agents["push_cube"]
+                #     )
+                # else:
+                #     success, obs = push_cube_mpc_execute(
+                #         env, obs, block_idx, goal_xyz, render=effective_render
+                #     )
+                # print(f"    → {'OK' if success else 'FAIL'}")
+                # if not success:
+                #     skill_failed = True
+                #     break
 
             elif sg_skill == "push_disk":
                 if region is None:
@@ -596,7 +599,7 @@ def run(
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed",                type=int,   default=0)
-    ap.add_argument("--max_replans",         type=int,   default=15)
+    ap.add_argument("--max_replans",         type=int,   default=1)#15)
     ap.add_argument("--offline",             action="store_true")
     ap.add_argument("--render",              action="store_true", help="Open a viewer window")
     ap.add_argument("--model",               default="gemini-2.5-flash")
@@ -610,8 +613,8 @@ if __name__ == "__main__":
                     help="Pick skill PPO checkpoint")
     ap.add_argument("--place-checkpoint",    default="PlaceSkill", dest="place_checkpoint",
                     help="Place skill PPO checkpoint")
-    ap.add_argument("--push-cube-checkpoint", default="PushCube", dest="push_cube_checkpoint",
-                    help="Push-cube skill PPO checkpoint")
+    # ap.add_argument("--push-cube-checkpoint", default="PushCube", dest="push_cube_checkpoint",
+    #                 help="Push-cube skill PPO checkpoint")
     ap.add_argument("--push-o-checkpoint", default="PushO", dest="push_o_checkpoint",
                     help="Push-O skill PPO checkpoint")
     ap.add_argument("--capture-video",     action="store_true", dest="capture_video",
@@ -632,7 +635,7 @@ if __name__ == "__main__":
         reach_device=args.reach_device,
         pick_checkpoint=_resolve_checkpoint(args.pick_checkpoint),
         place_checkpoint=_resolve_checkpoint(args.place_checkpoint),
-        push_cube_checkpoint=_resolve_checkpoint(args.push_cube_checkpoint),
+        # push_cube_checkpoint=_resolve_checkpoint(args.push_cube_checkpoint),
         push_o_checkpoint=_resolve_checkpoint(args.push_o_checkpoint),
         capture_video=args.capture_video,
         video_dir=args.video_dir,

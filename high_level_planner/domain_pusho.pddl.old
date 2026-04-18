@@ -50,3 +50,8 @@
     :parameters (?rob - robot ?b - obstacle ?loc - region)
     :precondition (and (holding ?rob ?b) (robot-at ?rob ?loc) (clear ?loc))
     :effect (and (obstacle-at ?b ?loc) (not (holding ?rob ?b)) (not (clear ?loc))))
+
+  (:action push_cube
+    :parameters (?rob - robot ?b - obstacle ?from ?to - region)
+    :precondition (and (push-only ?b) (obstacle-at ?b ?from) (robot-at ?rob ?from) (adjacent ?from ?to) (clear ?to))
+    :effect (and (obstacle-at ?b ?to) (not (obstacle-at ?b ?from)) (robot-at ?rob ?to) (not (robot-at ?rob ?from)) (clear ?from) (not (clear ?to)))))

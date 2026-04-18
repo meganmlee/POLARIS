@@ -23,9 +23,9 @@ TABLE_BOUND = 0.30
 TILE_SIZE_M = (2.0 * TABLE_BOUND) / GRID
 
 NUM_OBSTACLES = 10
-NUM_PICKABLE = 5
+NUM_PICKABLE = 10#5
 
-VALID_SKILLS = frozenset({"reach", "push_disk", "pick", "place", "push_cube"})
+VALID_SKILLS = frozenset({"reach", "push_disk", "pick", "place"})
 
 
 def _region_to_name(idx: int) -> str:
@@ -146,7 +146,7 @@ def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray
     pushonly_range = f"obstacle{n_pickable}..{n_obstacles - 1}" if n_pickable < n_obstacles else "none"
     scenario = (
         f"; robot={_region_to_name(re)}, disk={_region_to_name(rd)}, goal={_region_to_name(rg)}. Obstacles: {obstacle_list}. "
-        f"{pickable_range} pickable (pick+place); {pushonly_range} push-only (push_cube). "
+        f"{pickable_range} pickable (pick+place). " #; {pushonly_range} push-only (push_cube). "
         f"{on_path_str} "
         "Output: one line per subgoal, SKILL<TAB>STATE (one PDDL atom in parens)."
     )
@@ -283,7 +283,9 @@ def _clear_path_subgoals(disk_r: int, goal_r: int, blocked: set, problem_str: st
             if drop is not None:
                 subgoals.append({"skill": "place", "state": f"(obstacle-at {obstacle_name} {_region_to_name(drop)})"})
         elif obstacle_name in push_only and drop is not None:
-            subgoals.append({"skill": "push_cube", "state": f"(obstacle-at {obstacle_name} {_region_to_name(drop)})"})
+            print("    [SKIP] push_cube skill disabled but cube is labeled as push_only, dangerously skipping")
+        # elif obstacle_name in push_only and drop is not None:
+        #     subgoals.append({"skill": "push_cube", "state": f"(obstacle-at {obstacle_name} {_region_to_name(drop)})"})
 
     return subgoals
 
@@ -376,9 +378,9 @@ def plan_to_subgoals(plan_str: str, _problem_str: str) -> list[dict]:
         if m:
             subgoals.append({"skill": "place", "state": f"(obstacle-at {m.group(1)} {m.group(2)})"})
             continue
-        m = re.match(r"\(push_cube robot1 (obstacle\d+) r_\d+_\d+ (r_\d+_\d+)\)", line)
-        if m:
-            subgoals.append({"skill": "push_cube", "state": f"(obstacle-at {m.group(1)} {m.group(2)})"})
+        # m = re.match(r"\(push_cube robot1 (obstacle\d+) r_\d+_\d+ (r_\d+_\d+)\)", line)
+        # if m:
+        #     subgoals.append({"skill": "push_cube", "state": f"(obstacle-at {m.group(1)} {m.group(2)})"})
     return subgoals
 
 
@@ -420,8 +422,8 @@ Rules:
 - Order matters: earlier lines must be achievable before later ones.
 - The disk is ~3x the diameter of an obstacle cube (~1.5-tile radius). push_disk requires not just the destination cell to be (clear ?to), but ALL cells within 1 tile of the entire disk path to be free. For example, if the disk is going to r_4_4, all obstacles between r_3_3 and r_5_5 could block it.
 - End with: push_disk	(object-at disk {goal_region})
-- Before that push chain: if obstacles block the path, clear them (pick/place or push_cube), then reach to the disk's cell, then many push_disk steps (one grid cell per push_disk toward {goal_region}).
-- Skills: reach, push_disk, pick, place, push_cube. States: (robot-at robot1 r_i_j), (object-at disk r_i_j), (holding robot1 obstacleN), (obstacle-at obstacleN r_i_j). Never use tee or push_tee — only disk and push_disk.
+- Before that push chain: if obstacles block the path, clear them (pick/place), then reach to the disk's cell, then many push_disk steps (one grid cell per push_disk toward {goal_region}).
+- Skills: reach, push_disk, pick, place. States: (robot-at robot1 r_i_j), (object-at disk r_i_j), (holding robot1 obstacleN), (obstacle-at obstacleN r_i_j).
 
 Domain:
 {domain}
