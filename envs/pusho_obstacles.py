@@ -348,7 +348,10 @@ class ReachWithObstaclesEnv(PushOWithObstaclesEnv):
     def compute_dense_reward(self, obs, action, info):
         reach_reward  = 1.0 - torch.tanh(5.0 * info["dist_to_goal"])
         success_bonus = info["success"].float() * 5.0
-        return reach_reward + success_bonus
+        q = self.agent.tcp.pose.q  # (N, 4) wxyz
+        tcp_z_world_z = 1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 2] ** 2)
+        upright_reward = -0.2 * (1.0 - tcp_z_world_z ** 2)
+        return reach_reward + success_bonus + upright_reward
 
     def compute_normalized_dense_reward(self, obs, action, info):
         return self.compute_dense_reward(obs, action, info) / 6.0
@@ -456,7 +459,10 @@ class PushCubeWithObstaclesEnv(PushOWithObstaclesEnv):
         reach_reward  = 1.0 - torch.tanh(5.0 * torch.norm(ee_pos - goal_cube_pos, dim=1))
         push_reward   = 1.0 - torch.tanh(5.0 * info["dist_cube_to_goal"])
         success_bonus = info["success"].float() * 5.0
-        return reach_reward + push_reward + success_bonus
+        q = self.agent.tcp.pose.q  # (N, 4) wxyz
+        tcp_z_world_z = 1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 2] ** 2)
+        upright_reward = -0.2 * (1.0 - tcp_z_world_z ** 2)
+        return reach_reward + push_reward + success_bonus + upright_reward
 
     def compute_normalized_dense_reward(self, obs, action, info):
         return self.compute_dense_reward(obs, action, info) / 7.0
@@ -500,7 +506,7 @@ class PushOWallObstaclesEnv(PushOWithObstaclesEnv):
     }
 
     # Set to a key from PRESETS to fix positions; None → random (default).
-    preset: str | None = "straight-1" #"same_side" #fails when placing cube 6
+    preset: str | None = "straight-5" #"same_side" #fails when placing cube 6
 
 
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
@@ -544,7 +550,7 @@ class PushOWallObstaclesEnv(PushOWithObstaclesEnv):
                 cube.set_pose(pose)
 
 
-@register_env("PickSkillEnv", max_episode_steps=100)
+@register_env("PickSkillEnv", max_episode_steps=50)
 class PickSkillEnv(PushOWithObstaclesEnv):
     """Pick a randomly selected obstacle cube off the table.
 
@@ -564,6 +570,12 @@ class PickSkillEnv(PushOWithObstaclesEnv):
         super()._initialize_episode(env_idx, options)
         with torch.device(self.device):
             b = len(env_idx)
+            q_id   = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).expand(b, 4)
+            park_p = torch.tensor([[2.0, 0.0, 0.05]], device=self.device).expand(b, 3)
+            park_pose = Pose.create_from_pq(p=park_p, q=q_id)
+            self.disk.set_pose(park_pose)
+            self.goal_site.set_pose(park_pose)
+
             if not hasattr(self, "pick_obstacle_idx") or self.pick_obstacle_idx.shape[0] != self.num_envs:
                 self.pick_obstacle_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
             self.pick_obstacle_idx[env_idx] = torch.randint(
@@ -611,13 +623,23 @@ class PickSkillEnv(PushOWithObstaclesEnv):
         gripper_openness = finger_pos.sum(dim=1) / (2 * 0.04)  # 0=closed, 1=fully open
         near_cube   = (dist < 0.06).float()
         pregrasp_reward = near_cube * gripper_openness
+        q = self.agent.tcp.pose.q  # (N, 4) wxyz
+        tcp_z_world_z = 1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 2] ** 2)
+        upright_reward = -0.5 * (1.0 - tcp_z_world_z ** 2)
+        reward = reach_reward + pregrasp_reward + is_grasped + lift_reward * is_grasped + upright_reward
 
-        reward = reach_reward + pregrasp_reward + is_grasped + lift_reward * is_grasped
-        reward[info["success"]] = 5.0
+        # Once successful, override reward with a bonus minus a penalty for EE
+        # movement. This teaches the policy to hold still after grasping rather
+        # than continuing to drive into the table or out of the scene.
+        success = info["success"]
+        if success.any():
+            action_penalty = torch.linalg.norm(action[success, :7], dim=1)
+            reward[success] = 5.0 - 0.5 * action_penalty
+
         return reward
 
     def compute_normalized_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
-        return self.compute_dense_reward(obs=obs, action=action, info=info) / 6.0
+        return self.compute_dense_reward(obs=obs, action=action, info=info) / 7.0
 
     @property
     def _default_human_render_camera_configs(self):

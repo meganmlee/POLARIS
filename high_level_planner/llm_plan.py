@@ -247,13 +247,14 @@ def _clear_path_subgoals(disk_r: int, goal_r: int, blocked: set, problem_str: st
     positions, pickable, push_only = _parse_obstacle_info(problem_str)
     adj = _adjacency()
 
+    occupied = set(positions.values())  # tracks all taken drop spots to avoid duplicates
     subgoals = []
     for obstacle_name, obstacle_region in positions.items():
         if obstacle_region not in disk_zone:
             continue
 
         # BFS outward from the obstacle to find the nearest cell that is
-        # outside the disk zone, unblocked, and at least 2 steps away.
+        # outside the disk zone, unblocked, not already occupied, and at least 2 steps away.
         drop = None
         seen_drop = {obstacle_region}
         frontier = [(obstacle_region, 0)]
@@ -263,15 +264,17 @@ def _clear_path_subgoals(disk_r: int, goal_r: int, blocked: set, problem_str: st
                 if n in seen_drop:
                     continue
                 seen_drop.add(n)
-                if n not in blocked and n not in disk_zone and depth + 1 >= 2:
+                if n not in blocked and n not in disk_zone and n not in occupied and depth + 1 >= 2:
                     drop = n
                     break
                 frontier.append((n, depth + 1))
             if drop is not None:
                 break
-        # Fallback: any unblocked adjacent cell if BFS found nothing
+        # Fallback: any unblocked, unoccupied adjacent cell if BFS found nothing
         if drop is None:
-            drop = next((n for n in adj[obstacle_region] if n not in blocked), None)
+            drop = next((n for n in adj[obstacle_region] if n not in blocked and n not in occupied), None)
+        if drop is not None:
+            occupied.add(drop)
 
         subgoals.append({
             "skill": "reach",

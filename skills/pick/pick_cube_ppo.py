@@ -44,14 +44,14 @@ class Args:
     env_id: str = "PickSkillEnv"
     obs_mode: str = "state"
     control_mode: str = "pd_ee_delta_pose"
-    num_envs: int = 512
-    num_eval_envs: int = 8
+    num_envs: int = 1024
+    num_eval_envs: int = 16
     reconfiguration_freq: Optional[int] = None
     eval_reconfiguration_freq: Optional[int] = 1
-    num_steps: int = 100
-    num_eval_steps: int = 100
+    num_steps: int = 50
+    num_eval_steps: int = 50
     partial_reset: bool = True
-    eval_partial_reset: bool = False
+    eval_partial_reset: bool = False # cannot be used if reconfiguration_freq
 
     total_timesteps: int = 10_000_000
     learning_rate: float = 3e-4
@@ -70,10 +70,10 @@ class Args:
     reward_scale: float = 1.0
     finite_horizon_gae: bool = False
 
-    eval_freq: int = 25
+    eval_freq: int = 20
     save_model: bool = True
     capture_video: bool = True
-    save_eval_video_freq: Optional[int] = 5
+    save_eval_video_freq: Optional[int] = 1
 
     evaluate: bool = False
     checkpoint: Optional[str] = None

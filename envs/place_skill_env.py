@@ -222,6 +222,11 @@ class PlaceSkillEnv(BaseEnv):
         )
         reward += retreat_reward * info["is_placed"].float()
 
+        q = self.agent.tcp_pose.q  # (N, 4) wxyz
+        tcp_z_world_z = 1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 2] ** 2)
+        upright_reward = -0.2 * (1.0 - tcp_z_world_z ** 2)
+        reward += upright_reward
+
         # Terminal bonus
         reward[info["success"]] = 5.0
         return reward
