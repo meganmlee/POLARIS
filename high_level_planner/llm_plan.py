@@ -417,6 +417,7 @@ def _build_subgoal_prompt(domain: str, problem_str: str) -> str:
     goal_region = _goal_region_from_problem(problem_str) or "r_0_0"
     return f"""You decompose this Push-O task into ordered logical subgoals (milestones). The movable object is an O-shaped disk (circular puck); PDDL uses the constant `disk` for it.
 Each line is one milestone: the SKILL that achieves it, then TAB, then the target state as ONE PDDL atom in parentheses.
+When picking and placing the obstacles, try to move them a bit farther away from other obstacles as they may interfere with each other.
 
 Rules:
 - Order matters: earlier lines must be achievable before later ones.
@@ -450,6 +451,7 @@ def _call_vertex_subgoals(prompt: str, model: str, temperature: float, config: d
         prompt,
         generation_config={"temperature": temperature, "max_output_tokens": 2048},
     )
+
     if not response.candidates or not response.candidates[0].content.parts:
         raise RuntimeError("LLM returned empty response")
     return response.candidates[0].content.parts[0].text.strip()

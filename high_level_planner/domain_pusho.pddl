@@ -12,6 +12,7 @@
 ;     it out of the way.
 ;   - (push-only ?b): obstacle is BIGGER than gripper → cannot pick; use PUSH_CUBE
 ;     to push it one cell out of the way.
+;   When picking and placing the obstacles, try to move them a bit farther away from other obstacles as they may interfere with each other.
 ; The planner must figure out from (pickable obstaclei) and (push-only obstaclej) which
 ; action to use for each obstacle. Main objective: get the disk to the goal region.
 ; =============================================================================

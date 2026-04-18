@@ -492,10 +492,16 @@ class PushOWallObstaclesEnv(PushOWithObstaclesEnv):
         #              disk (x, y)          goal (x, y)
         "cross_center": ((-0.06, -0.21),  ( 0.06,  0.21)),
         "same_side":    ((-0.09, -0.15),  ( 0.15, -0.21)),
+        "straight-1":   ((0, -0.15), (0, 0.15)),
+        "straight-2":   ((0.06, -0.15), (0.06, 0.15)),
+        "straight-3":   ((0.12, -0.15), (0.12, 0.15)),
+        "straight-4":   ((0.18, -0.15), (0.18, 0.15)),
+        "straight-5":   ((-0.06, -0.15), (-0.06, 0.15)),
     }
 
     # Set to a key from PRESETS to fix positions; None → random (default).
-    preset: str | None = "cross_center" #"same_side"
+    preset: str | None = "straight-1" #"same_side" #fails when placing cube 6
+
 
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         # Let PushOWithObstaclesEnv set up disk, goal, robot positions first,
