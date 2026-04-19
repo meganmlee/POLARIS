@@ -25,6 +25,12 @@ NUM_PICKABLE = 10
 
 VALID_SKILLS = frozenset({"reach", "push_disk", "pick", "place"})
 
+FAR_COLS = frozenset({8, 9})
+
+
+def _is_far_col(idx: int) -> bool:
+    return (idx % GRID) in FAR_COLS
+
 
 def _region_to_name(idx: int) -> str:
     row, col = idx // GRID, idx % GRID
@@ -101,7 +107,7 @@ def _adjacent_pairs():
 
 def _region_layout_comment() -> str:
     return (
-        f"; REGIONS: r_m_n, m row 0..{GRID - 1}, n col 0..{GRID - 1}. "
+        f"; REGIONS: r_m_n, m row 0..{GRID - 1}, n col 0..7. "
         f"Tile size ~{TILE_SIZE_M:.4f} m. Adjacent = edge neighbors."
     )
 
@@ -110,13 +116,22 @@ def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray
     rd = _xy_to_region(disk_xy[0], disk_xy[1])
     rg = _xy_to_region(goal_xy[0], goal_xy[1])
     re = _xy_to_region(ee_xy[0], ee_xy[1])
-    obstacles = list(obstacle_regions)[:NUM_OBSTACLES]
-    n_obstacles = len(obstacles)
-    n_pickable = min(NUM_PICKABLE, n_obstacles)
+    all_obstacles = list(obstacle_regions)[:NUM_OBSTACLES]
     stuck = stuck_obstacles or set()
-    region_set = set(obstacles)
-    region_names = [_region_to_name(i) for i in range(GRID * GRID)]
-    objects = "robot1 - robot disk - disk " + " ".join(f"obstacle{i}" for i in range(n_obstacles)) + " - obstacle " + " ".join(region_names) + " - region"
+
+    # Filter obstacles in far rows (rows 8-9) — invisible to the LLM.
+    # Re-index so the LLM sees a clean obstacle0..N list.
+    orig_indices = [i for i, r in enumerate(all_obstacles) if not _is_far_col(r)]
+    obstacles = [all_obstacles[i] for i in orig_indices]
+    n_obstacles = len(obstacles)
+    n_pickable = min(NUM_PICKABLE, sum(1 for i in orig_indices if i < min(NUM_PICKABLE, len(all_obstacles))))
+    vis_stuck = {new_i for new_i, orig_i in enumerate(orig_indices) if orig_i in stuck}
+
+    region_set = set(all_obstacles)  # full set for clear/disk-clear blocking
+    # Regions visible to the LLM: exclude far rows, but always include disk/goal cells.
+    special_regions = {rd, rg}
+    region_names = [_region_to_name(i) for i in range(GRID * GRID) if not _is_far_col(i) or i in special_regions]
+    objects_str = "robot1 - robot disk - disk " + " ".join(f"obstacle{i}" for i in range(n_obstacles)) + " - obstacle " + " ".join(region_names) + " - region"
     init = [
         f"(robot-at robot1 {_region_to_name(re)})",
         f"(object-at disk {_region_to_name(rd)})",
@@ -124,25 +139,26 @@ def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray
         "(hand-empty robot1)",
     ]
     for i in range(n_pickable):
-        if i not in stuck:
+        if i not in vis_stuck:
             init.append(f"(pickable obstacle{i})")
         # stuck obstacles get no pickable/push-only predicate → treated as permanent walls
     for i in range(n_pickable, n_obstacles):
-        if i not in stuck:
+        if i not in vis_stuck:
             init.append(f"(push-only obstacle{i})")
     for i, r in enumerate(obstacles):
         init.append(f"(obstacle-at obstacle{i} {_region_to_name(r)})")
-    # (clear): cell has no obstacle — used by pick/place.
+    # (clear): cell has no obstacle — used by pick/place. Far rows excluded as targets.
     for i in range(GRID * GRID):
-        if i not in region_set:
+        if i not in region_set and not _is_far_col(i):
             init.append(f"(clear {_region_to_name(i)})")
-    # (disk-clear): cell has a full 1-tile buffer around all obstacles — used only by push_disk.
+    # (disk-clear): 1-tile buffer around obstacles — used only by push_disk. Far rows excluded.
     disk_blocked_set = _expand_cells_by_1(region_set)
     for i in range(GRID * GRID):
-        if i not in disk_blocked_set:
+        if i not in disk_blocked_set and not _is_far_col(i):
             init.append(f"(disk-clear {_region_to_name(i)})")
     for a, b in _adjacent_pairs():
-        init.append(f"(adjacent {_region_to_name(a)} {_region_to_name(b)})")
+        if not _is_far_col(a) and not _is_far_col(b):
+            init.append(f"(adjacent {_region_to_name(a)} {_region_to_name(b)})")
     goal = f"(object-at disk {_region_to_name(rg)})"
     path_disk_to_goal_cells = set(_bfs_path(rd, rg, set()))
     disk_zone = _expand_cells_by_1(path_disk_to_goal_cells)
@@ -152,10 +168,9 @@ def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray
         f" Obstacles ON THE PATH (clear first): " + ", ".join(f"obstacle{i} at {_region_to_name(obstacles[i])}" for i in obstacles_on_path) + "."
     ) if obstacles_on_path else " No obstacles on direct disk→goal path; may still need clears."
     pickable_range = f"obstacle0..{n_pickable - 1}" if n_pickable > 0 else "none"
-    pushonly_range = f"obstacle{n_pickable}..{n_obstacles - 1}" if n_pickable < n_obstacles else "none"
     scenario = (
         f"; robot={_region_to_name(re)}, disk={_region_to_name(rd)}, goal={_region_to_name(rg)}. Obstacles: {obstacle_list}. "
-        f"{pickable_range} pickable (pick+place). " #; {pushonly_range} push-only (push_cube). "
+        f"{pickable_range} pickable (pick+place). "
         f"{on_path_str} "
         "Output: one line per subgoal, SKILL<TAB>STATE (one PDDL atom in parens)."
     )
@@ -164,7 +179,7 @@ def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray
 {scenario}
 (define (problem pusho-1)
   (:domain pusho)
-  (:objects {objects})
+  (:objects {objects_str})
   (:init
     {" ".join(init)}
   )
@@ -273,15 +288,15 @@ def _clear_path_subgoals(disk_r: int, goal_r: int, blocked: set, problem_str: st
                 if n in seen_drop:
                     continue
                 seen_drop.add(n)
-                if n not in blocked and n not in disk_zone and n not in occupied and depth + 1 >= 2:
+                if n not in blocked and n not in disk_zone and n not in occupied and not _is_far_col(n) and depth + 1 >= 2:
                     drop = n
                     break
                 frontier.append((n, depth + 1))
             if drop is not None:
                 break
-        # Fallback: any unblocked, unoccupied adjacent cell if BFS found nothing
+        # Fallback: any unblocked, unoccupied, in-bounds adjacent cell if BFS found nothing
         if drop is None:
-            drop = next((n for n in adj[obstacle_region] if n not in blocked and n not in occupied), None)
+            drop = next((n for n in adj[obstacle_region] if n not in blocked and n not in occupied and not _is_far_col(n)), None)
         if drop is not None:
             occupied.add(drop)
 

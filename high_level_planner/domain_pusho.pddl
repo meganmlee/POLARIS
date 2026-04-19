@@ -1,7 +1,7 @@
 ; =============================================================================
 ; PDDL domain: PushO with obstacles (tabletop manipulation)
 ; =============================================================================
-; TABLE: Grid of regions r_m_n (m=row, n=column). Goal = one of these regions.
+; TABLE: Grid of regions r_m_n (m=row, n=column). Goal = one of these regions. Do not attempt to target regions with columns larger than 7 as they are outside the robot's reachable workspace.
 ; DISK SIZE: The disk is ~3x the diameter of an obstacle cube (~1.5-tile radius).
 ;   push_disk requires not just the destination cell to be (clear ?to), but ALL cells
 ;   within 1 tile of the entire disk path to be free. Clear every obstacle adjacent to
