@@ -14,8 +14,6 @@ import warnings
 
 import numpy as np
 
-from openai import OpenAI
-
 warnings.filterwarnings("ignore", message=".*deprecated.*")
 
 GRID = 10
@@ -23,7 +21,7 @@ TABLE_BOUND = 0.30
 TILE_SIZE_M = (2.0 * TABLE_BOUND) / GRID
 
 NUM_OBSTACLES = 10
-NUM_PICKABLE = 10#5
+NUM_PICKABLE = 10
 
 VALID_SKILLS = frozenset({"reach", "push_disk", "pick", "place"})
 
@@ -584,7 +582,7 @@ def get_subgoals(
         try:
             llm_steps = _call_llm_subgoals(domain_text, problem_str, model, temperature, config)
         except Exception as e:
-            print("Exception 1")
+            print("Exception during LLM Call:")
             print(e)
             llm_steps = []
         if not llm_steps:
@@ -598,7 +596,7 @@ def get_subgoals(
     try:
         llm_steps = _call_llm_subgoals(domain_text, problem_str, model, temperature, config)
     except Exception as e:
-        print("Exception 2")
+        print("Exception during LLM Call:")
         print(e)
         llm_steps = []
 
@@ -608,8 +606,7 @@ def get_subgoals(
             return plan_to_subgoals(plan, problem_str)
         return compute_subgoals(problem_str)
 
-    if llm_steps:
-        print("LLM subgoals generated successfully")
+    print("LLM subgoals generated successfully")
         
     llm_steps = _ensure_disk_goal_tail(llm_steps, problem_str)
 
