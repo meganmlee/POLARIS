@@ -310,7 +310,7 @@ class PushOWithObstaclesEnv(PushOEnv):
                 cube.set_pose(pose)
 
 
-@register_env("Reach-WithObstacles-v1", max_episode_steps=200)
+@register_env("Reach-WithObstacles-v1", max_episode_steps=50)
 class ReachWithObstaclesEnv(PushOWithObstaclesEnv):
     """Move EE to a random goal above the table. Same scene as PushO-WithObstacles.
 
@@ -326,7 +326,7 @@ class ReachWithObstaclesEnv(PushOWithObstaclesEnv):
         super()._initialize_episode(env_idx, options)
         with torch.device(self.device):
             b = len(env_idx)
-            goal_xy = (torch.rand((b, 2), device=self.device) * 2 - 1) * 0.20
+            goal_xy = (torch.rand((b, 2), device=self.device) * 2 - 1) * 0.25
             goal_z  = torch.rand((b, 1), device=self.device) * 0.30 + 0.15
             if not hasattr(self, "goal_pos") or self.goal_pos.shape[0] != self.num_envs:
                 self.goal_pos = torch.zeros((self.num_envs, 3), device=self.device)
@@ -347,11 +347,27 @@ class ReachWithObstaclesEnv(PushOWithObstaclesEnv):
 
     def compute_dense_reward(self, obs, action, info):
         reach_reward  = 1.0 - torch.tanh(5.0 * info["dist_to_goal"])
-        success_bonus = info["success"].float() * 5.0
         q = self.agent.tcp.pose.q  # (N, 4) wxyz
         tcp_z_world_z = 1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 2] ** 2)
         upright_reward = -0.2 * (1.0 - tcp_z_world_z ** 2)
-        return reach_reward + success_bonus + upright_reward
+        # Per-step action penalties: encourage small, stable motions.
+        # action layout for pd_ee_delta_pose: [dx, dy, dz, droll, dpitch, dyaw, gripper]
+        # Roll (3) and pitch (4) get a 5× higher penalty — large values destabilize
+        # the EE orientation for downstream skills.
+        translate_penalty     = 0.02 * torch.linalg.norm(action[:, :3], dim=1)
+        yaw_penalty       = 0.02 * action[:, 5].abs()
+        roll_pitch_penalty = 0.10 * action[:, 3:5].abs().sum(dim=1)
+        action_reg = translate_penalty + yaw_penalty + roll_pitch_penalty
+        reward = reach_reward + upright_reward - action_reg
+
+        # Once successful, override reward with a bonus minus a penalty for EE
+        # movement. This teaches the policy to hold still after grasping rather
+        # than continuing to drive into the table or out of the scene.
+        success = info["success"]
+        if success.any():
+            action_penalty = torch.linalg.norm(action[success, :7], dim=1)
+            reward[success] = 5.0 - 0.5 * action_penalty
+        return reward
 
     def compute_normalized_dense_reward(self, obs, action, info):
         return self.compute_dense_reward(obs, action, info) / 6.0

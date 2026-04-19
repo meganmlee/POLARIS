@@ -45,8 +45,8 @@ class Args:
     env_id: str = "PlaceSkillEnv"
     obs_mode: str = "state"
     control_mode: str = "pd_ee_delta_pose"
-    num_envs: int = 512
-    num_eval_envs: int = 8
+    num_envs: int = 1024
+    num_eval_envs: int = 16
     reconfiguration_freq: Optional[int] = None
     eval_reconfiguration_freq: Optional[int] = 1
     num_steps: int = 100
@@ -74,7 +74,7 @@ class Args:
     eval_freq: int = 25
     save_model: bool = True
     capture_video: bool = True
-    save_eval_video_freq: Optional[int] = 5
+    save_eval_video_freq: Optional[int] = 1
 
     evaluate: bool = False
     checkpoint: Optional[str] = None
