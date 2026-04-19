@@ -11,15 +11,6 @@ Metrics tracked per (skill, env_id):
   - Avg / min / max time    — wall-clock seconds per run
   - Avg replans used        — planning efficiency (fewer = better)
   - Skill failure breakdown — which sub-skill (reach/pick/place/push_disk) fails most
-
-Brainstorm — other things worth adding:
-  - Partial progress score  : how far the disk got even on failure (env reward signal)
-  - Stuck obstacle rate     : how often an obstacle gets marked immovable
-  - LLM call count / latency: planning overhead vs execution overhead
-  - Auto skill MPC-vs-PPO split: for --skill auto, log which backend was chosen per subgoal
-  - Replan reason histogram : planning failure vs skill failure vs give_up
-  - Per-obstacle failure map: which obstacle indices cause most pick/place failures
-  - Variance / std across seeds: captures env stochasticity vs skill brittleness
 """
 import argparse
 import json
