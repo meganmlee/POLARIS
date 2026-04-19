@@ -468,7 +468,7 @@ class PushCubeWithObstaclesEnv(PushOWithObstaclesEnv):
         return self.compute_dense_reward(obs, action, info) / 7.0
 
 
-@register_env("PushO-WallObstacles-v1", max_episode_steps=200)
+@register_env("PushO-WallObstacles-v1", max_episode_steps=2000)
 class PushOWallObstaclesEnv(PushOWithObstaclesEnv):
     """PushO where all 10 obstacle cubes are fixed in a wall across the table.
 

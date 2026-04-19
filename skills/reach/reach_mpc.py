@@ -72,9 +72,10 @@ def execute(
     act_dim = env.action_space.shape[0]
     current_obs = obs
 
-    for _ in range(max_steps):
+    for step in range(max_steps):
         ee_pos = get_ee_pos(current_obs)
-        if np.linalg.norm(ee_pos - goal_xyz) < success_threshold:
+        dist = np.linalg.norm(ee_pos - goal_xyz)
+        if dist < success_threshold:
             return True, current_obs
 
         delta = controller.get_action({"ee_pos": ee_pos})
@@ -82,10 +83,17 @@ def execute(
         action[:3] = delta
         current_obs, done = step_env(env, action, render)
         if done:
-            break
+            final_ee = get_ee_pos(current_obs)
+            final_dist = np.linalg.norm(final_ee - goal_xyz)
+            print(f"[reach_mpc] FAIL: env terminated early at step {step + 1}/{max_steps}  "
+                  f"dist={final_dist * 100:.1f} cm  goal={np.round(goal_xyz, 3)}  ee={np.round(final_ee, 3)}")
+            return False, current_obs
 
     final_ee = get_ee_pos(current_obs)
-    return bool(np.linalg.norm(final_ee - goal_xyz) < success_threshold), current_obs
+    final_dist = np.linalg.norm(final_ee - goal_xyz)
+    print(f"[reach_mpc] FAIL: max_steps={max_steps} exceeded  "
+          f"dist={final_dist * 100:.1f} cm  goal={np.round(goal_xyz, 3)}  ee={np.round(final_ee, 3)}")
+    return bool(final_dist < success_threshold), current_obs
 
 
 # ---------------------------------------------------------------------------

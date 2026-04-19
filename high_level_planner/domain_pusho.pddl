@@ -26,8 +26,10 @@
     (object-at ?o - disk ?loc - region)
     (obstacle-at ?b - obstacle ?loc - region)
     (holding ?r - robot ?b - obstacle)
+    (hand-empty ?r - robot)
     (goal-at ?loc - region)
     (clear ?loc - region)
+    (disk-clear ?loc - region)
     (adjacent ?loc1 ?loc2 - region)
     (pickable ?b - obstacle)
     (push-only ?b - obstacle))
@@ -39,15 +41,15 @@
 
   (:action push_disk
     :parameters (?rob - robot ?from ?to - region)
-    :precondition (and (robot-at ?rob ?from) (object-at disk ?from) (adjacent ?from ?to) (clear ?to))
+    :precondition (and (hand-empty ?rob) (robot-at ?rob ?from) (object-at disk ?from) (adjacent ?from ?to) (disk-clear ?to))
     :effect (and (object-at disk ?to) (not (object-at disk ?from)) (robot-at ?rob ?to) (not (robot-at ?rob ?from))))
 
   (:action pick
     :parameters (?rob - robot ?b - obstacle ?loc - region)
-    :precondition (and (pickable ?b) (robot-at ?rob ?loc) (obstacle-at ?b ?loc) (not (holding ?rob ?b)))
-    :effect (and (holding ?rob ?b) (not (obstacle-at ?b ?loc)) (clear ?loc)))
+    :precondition (and (hand-empty ?rob) (pickable ?b) (robot-at ?rob ?loc) (obstacle-at ?b ?loc))
+    :effect (and (holding ?rob ?b) (not (hand-empty ?rob)) (not (obstacle-at ?b ?loc)) (clear ?loc) (disk-clear ?loc)))
 
   (:action place
     :parameters (?rob - robot ?b - obstacle ?loc - region)
     :precondition (and (holding ?rob ?b) (robot-at ?rob ?loc) (clear ?loc))
-    :effect (and (obstacle-at ?b ?loc) (not (holding ?rob ?b)) (not (clear ?loc))))
+    :effect (and (obstacle-at ?b ?loc) (not (holding ?rob ?b)) (hand-empty ?rob) (not (clear ?loc)) (not (disk-clear ?loc)))))

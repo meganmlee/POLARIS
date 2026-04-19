@@ -108,13 +108,14 @@ def _region_layout_comment() -> str:
     )
 
 
-def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray, obstacle_regions: list) -> str:
+def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray, obstacle_regions: list, stuck_obstacles: set = None) -> str:
     rd = _xy_to_region(disk_xy[0], disk_xy[1])
     rg = _xy_to_region(goal_xy[0], goal_xy[1])
     re = _xy_to_region(ee_xy[0], ee_xy[1])
     obstacles = list(obstacle_regions)[:NUM_OBSTACLES]
     n_obstacles = len(obstacles)
     n_pickable = min(NUM_PICKABLE, n_obstacles)
+    stuck = stuck_obstacles or set()
     region_set = set(obstacles)
     region_names = [_region_to_name(i) for i in range(GRID * GRID)]
     objects = "robot1 - robot disk - disk " + " ".join(f"obstacle{i}" for i in range(n_obstacles)) + " - obstacle " + " ".join(region_names) + " - region"
@@ -122,16 +123,26 @@ def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray
         f"(robot-at robot1 {_region_to_name(re)})",
         f"(object-at disk {_region_to_name(rd)})",
         f"(goal-at {_region_to_name(rg)})",
+        "(hand-empty robot1)",
     ]
     for i in range(n_pickable):
-        init.append(f"(pickable obstacle{i})")
+        if i not in stuck:
+            init.append(f"(pickable obstacle{i})")
+        # stuck obstacles get no pickable/push-only predicate → treated as permanent walls
     for i in range(n_pickable, n_obstacles):
-        init.append(f"(push-only obstacle{i})")
+        if i not in stuck:
+            init.append(f"(push-only obstacle{i})")
     for i, r in enumerate(obstacles):
         init.append(f"(obstacle-at obstacle{i} {_region_to_name(r)})")
+    # (clear): cell has no obstacle — used by pick/place.
     for i in range(GRID * GRID):
         if i not in region_set:
             init.append(f"(clear {_region_to_name(i)})")
+    # (disk-clear): cell has a full 1-tile buffer around all obstacles — used only by push_disk.
+    disk_blocked_set = _expand_cells_by_1(region_set)
+    for i in range(GRID * GRID):
+        if i not in disk_blocked_set:
+            init.append(f"(disk-clear {_region_to_name(i)})")
     for a, b in _adjacent_pairs():
         init.append(f"(adjacent {_region_to_name(a)} {_region_to_name(b)})")
     goal = f"(object-at disk {_region_to_name(rg)})"
@@ -329,35 +340,36 @@ def _push_disk_subgoals_only(problem_str: str) -> list[dict]:
     return [{"skill": "push_disk", "state": f"(object-at disk {_region_to_name(path[i])})"} for i in range(1, len(path))]
 
 
-def run_pddl_planner(domain_path: str, problem_str: str, timeout: int = 60) -> str | None:
+def run_pddl_planner(domain_path: str, problem_str: str, timeout: int = 10) -> str | None:
+    # Create the temporary problem file
     with tempfile.NamedTemporaryFile(mode="w", suffix=".pddl", delete=False) as f:
         f.write(problem_str)
         problem_path = f.name
+
+    soln_path = problem_path + ".soln"
     try:
         subprocess.run(
-            ["pyperplan", domain_path, problem_path],
+            ["pyperplan", "-s", "gbf", "-H", "hff", domain_path, problem_path],
             capture_output=True,
             text=True,
             timeout=timeout,
+            check=True
         )
-        soln_path = problem_path + ".soln"
         if os.path.isfile(soln_path):
             with open(soln_path, "r") as f:
                 plan = f.read().strip()
-            try:
-                os.remove(soln_path)
-            except OSError:
-                pass
             return plan if plan else None
         return None
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except Exception as e:
+        print(f"[pyperplan] Failed to generate plan: {e}")
         return None
     finally:
-        try:
-            os.remove(problem_path)
-        except OSError:
-            pass
-
+        for path in [problem_path, soln_path]:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
 
 def plan_to_subgoals(plan_str: str, _problem_str: str) -> list[dict]:
     subgoals = []
@@ -601,11 +613,9 @@ def get_subgoals(
         
     llm_steps = _ensure_disk_goal_tail(llm_steps, problem_str)
 
-    plan = run_pddl_planner(domain_path, problem_str)
-    if plan:
-        sym = plan_to_subgoals(plan, problem_str)
-        if sym:
-            return _align_llm_to_symbolic(llm_steps, sym)
+    sym = compute_subgoals(problem_str)
+    if sym:
+        return _align_llm_to_symbolic(llm_steps, sym)
 
     return llm_steps
 

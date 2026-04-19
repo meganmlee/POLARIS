@@ -273,13 +273,22 @@ def run(
     wrapper = ManiSkillPlanningWrapper(env, adapter=PushOTaskAdapter())
     obs, _ = wrapper.reset(seed=seed)
 
+    _init_ee = np.asarray(obs["extra"]["tcp_pose"], dtype=np.float32).reshape(-1)[:3].copy()
+
+    pick_fail_counts: dict[int, int] = {}
+    stuck_obstacles: set[int] = set()
+
     give_up = False
     for replan_i in range(max_replans):
         if give_up:
             break
         print(f"\n--- Plan {replan_i + 1}/{max_replans} ---")
+        if stuck_obstacles:
+            print(f"  [info] treating as immovable: {sorted(f'obstacle{i}' for i in stuck_obstacles)}")
+        temperature = min(replan_i * 0.2, 1.0)
         problem_str, subgoals = subgoals_from_wrapper(
-            wrapper, obs, offline=offline, model=model
+            wrapper, obs, offline=offline, model=model, stuck_obstacles=stuck_obstacles,
+            temperature=temperature,
         )
 
         if not subgoals:
@@ -394,6 +403,10 @@ def run(
 
                 print(f"    → {'OK' if success else 'FAIL'}")
                 if not success:
+                    pick_fail_counts[block_idx] = pick_fail_counts.get(block_idx, 0) + 1
+                    if pick_fail_counts[block_idx] >= 2:
+                        stuck_obstacles.add(block_idx)
+                        print(f"    [WARN] pick obstacle{block_idx} failed {pick_fail_counts[block_idx]}x — marking as immovable")
                     skill_failed = True
                     break
 
@@ -411,14 +424,11 @@ def run(
                     if skill_agents["place"] is None:
                         skill_agents["place"] = load_agent(place_checkpoint, dev)
 
-                # Primary target first, then spread-out fallbacks from the planner.
-                _place_regions = [region] + place_fallback_candidates(region)
+                px, py = region_to_xy(region)
+                goal_xyz = np.array([px, py, 0.02], dtype=np.float32)
+                print(f"    → place cube{block_idx} at {np.round(goal_xyz, 3)}")
                 success = False
-                for _attempt, _preg in enumerate(_place_regions):
-                    px, py = region_to_xy(_preg)
-                    goal_xyz = np.array([px, py, 0.02], dtype=np.float32)
-                    _tag = "" if _attempt == 0 else f" [retry {_attempt} → {_preg}]"
-                    print(f"    → place cube{block_idx} at {np.round(goal_xyz, 3)}{_tag}")
+                if True:
 
                     if skill == "auto":
                         raw_e = env.unwrapped
@@ -454,16 +464,16 @@ def run(
                         )
 
                     print(f"    → {'OK' if success else 'FAIL'}")
-                    if success:
-                        break
 
                 if not success:
-                    print("    [WARN] place failed on all candidates — opening gripper and continuing")
+                    print("    [WARN] place failed — opening gripper and replanning")
                     act_dim = env.action_space.shape[0]
                     open_action = np.zeros(act_dim, dtype=np.float32)
                     open_action[-1] = 1.0  # open gripper
                     for _ in range(15):
                         obs, _, _, _, _ = env.step(open_action)
+                    skill_failed = True
+                    break
 
             elif sg_skill == "push_cube":
                 print("    [SKIP] push_cube skill disabled — re-planning")
@@ -599,7 +609,7 @@ def run(
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed",                type=int,   default=0)
-    ap.add_argument("--max_replans",         type=int,   default=1)#15)
+    ap.add_argument("--max_replans",         type=int,   default=7)
     ap.add_argument("--offline",             action="store_true")
     ap.add_argument("--render",              action="store_true", help="Open a viewer window")
     ap.add_argument("--model",               default="gemini-2.5-flash")
