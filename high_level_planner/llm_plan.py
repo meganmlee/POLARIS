@@ -1,7 +1,7 @@
 """
 PushO-with-obstacles subgoal planning.
 
-Order: Gemini proposes logical steps → optional repair against a full symbolic plan
+Order: LLM proposes logical steps → optional repair against a full symbolic plan
 (pyperplan) so the sequence is sound → else full PDDL plan → else BFS.
 Output: list of {"skill", "state"}.
 """
@@ -13,6 +13,8 @@ import tempfile
 import warnings
 
 import numpy as np
+
+from openai import OpenAI
 
 warnings.filterwarnings("ignore", message=".*deprecated.*")
 
@@ -396,24 +398,9 @@ def _goal_region_from_problem(problem_str: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _call_gemini_subgoals(domain: str, problem_str: str, model: str, temperature: float, config: dict) -> list[dict]:
-    project = os.environ.get("VERTEX_PROJECT") or config.get("VERTEX_PROJECT")
-    location = os.environ.get("VERTEX_LOCATION") or config.get("VERTEX_LOCATION", "us-central1")
-    if not project:
-        raise RuntimeError("Set VERTEX_PROJECT in env or config.json for Gemini")
-    try:
-        import vertexai
-        from vertexai.generative_models import GenerativeModel
-    except ImportError:
-        raise RuntimeError("Install google-cloud-aiplatform: pip install google-cloud-aiplatform")
-    vertexai.init(project=project, location=location)
-    default_model = "gemini-2.5-flash"
-    gemini_model = model if model and not model.startswith("gpt-") else default_model
-    if gemini_model.startswith("gpt-"):
-        gemini_model = default_model
-    gen_model = GenerativeModel(gemini_model)
+def _build_subgoal_prompt(domain: str, problem_str: str) -> str:
     goal_region = _goal_region_from_problem(problem_str) or "r_0_0"
-    prompt = f"""You decompose this Push-O task into ordered logical subgoals (milestones). The movable object is an O-shaped disk (circular puck), not a T-piece; PDDL uses the constant `disk` for it.
+    return f"""You decompose this Push-O task into ordered logical subgoals (milestones). The movable object is an O-shaped disk (circular puck), not a T-piece; PDDL uses the constant `disk` for it.
 Each line is one milestone: the SKILL that achieves it, then TAB, then the target state as ONE PDDL atom in parentheses.
 
 Rules:
@@ -429,23 +416,74 @@ Problem:
 {problem_str}
 
 Output ONLY lines: SKILL<TAB>STATE. No other text."""
+
+
+def _call_vertex_subgoals(prompt: str, model: str, temperature: float, config: dict) -> str:
+    project = os.environ.get("VERTEX_PROJECT") or config.get("VERTEX_PROJECT")
+    location = os.environ.get("VERTEX_LOCATION") or config.get("VERTEX_LOCATION", "us-central1")
+    if not project:
+        raise RuntimeError("Set VERTEX_PROJECT in env or config.json for Gemini/VertexAI backend")
+    try:
+        import vertexai
+        from vertexai.generative_models import GenerativeModel
+    except ImportError:
+        raise RuntimeError("Install google-cloud-aiplatform: pip install google-cloud-aiplatform")
+    vertexai.init(project=project, location=location)
+    gen_model = GenerativeModel(model)
     response = gen_model.generate_content(
         prompt,
         generation_config={"temperature": temperature, "max_output_tokens": 2048},
     )
     if not response.candidates or not response.candidates[0].content.parts:
-        raise RuntimeError("Gemini returned empty response")
-    text = response.candidates[0].content.parts[0].text.strip()
+        raise RuntimeError("LLM returned empty response")
+    return response.candidates[0].content.parts[0].text.strip()
+
+
+def _call_openai_subgoals(prompt: str, model: str, temperature: float, config: dict) -> str:
+    try:
+        from openai import OpenAI
+    except ImportError:
+        raise RuntimeError("Install openai: pip install openai")
+    api_key = os.environ.get("OPENAI_API_KEY") or config.get("OPENAI_API_KEY")
+    base_url = "https://ai-gateway.andrew.cmu.edu" #os.environ.get("OPENAI_BASE_URL") or config.get("OPENAI_BASE_URL")
+    client = OpenAI(api_key=api_key, **({"base_url": base_url} if base_url else {}))
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=temperature,
+        max_tokens=2048,
+    )
+    text = response.choices[0].message.content
+    if not text:
+        raise RuntimeError("LLM returned empty response")
+    return text.strip()
+
+
+def _call_llm_subgoals(domain: str, problem_str: str, model: str, temperature: float, config: dict) -> list[dict]:
+    prompt = _build_subgoal_prompt(domain, problem_str)
+    backend = (os.environ.get("LLM_BACKEND") or config.get("LLM_BACKEND") or "").lower()
+    # Infer backend from model name if not explicitly set
+    if not backend:
+        if model and model.startswith("gemini"):
+            backend = "gemini"
+        else:
+            backend = "gemini-2.5-flash"
+    if backend == "gemini":
+        default_model = "gemini-2.5-flash"
+        resolved_model = model if model and model.startswith("gemini") else default_model
+        text = _call_vertex_subgoals(prompt, resolved_model, temperature, config)
+    else:
+        text = _call_openai_subgoals(prompt, model, temperature, config)
     return _parse_subgoals_response(text)
 
 
-def _align_gemini_to_symbolic(gemini_steps: list[dict], symbolic_steps: list[dict]) -> list[dict]:
-    """Sound order from symbolic plan; keep Gemini's skill when a step's state matches."""
+def _align_llm_to_symbolic(llm_steps: list[dict], symbolic_steps: list[dict]) -> list[dict]:
+    """Sound order from symbolic plan; keep LLM's skill when a step's state matches."""
     if not symbolic_steps:
-        return gemini_steps
+        return llm_steps
     out = []
     j = 0
-    for g in gemini_steps:
+    for g in llm_steps:
         while j < len(symbolic_steps) and symbolic_steps[j]["state"] != g["state"]:
             s = symbolic_steps[j]
             out.append({"skill": s["skill"], "state": s["state"]})
@@ -487,10 +525,10 @@ def get_subgoals(
     use_llm_first: bool = False,
 ) -> list[dict]:
     """
-    Default: Gemini logical subgoals → merge with full symbolic plan (sound order/skills where needed).
+    Default: LLM logical subgoals → merge with full symbolic plan (sound order/skills where needed).
     Fallbacks: symbolic plan only → BFS.
 
-    use_llm_first=True: Gemini only (+ optional push_disk tail), no pyperplan repair.
+    use_llm_first=True: LLM only (+ optional push_disk tail), no pyperplan repair.
     SUBGOAL_PDDL_FIRST=1 or LLM_PLAN_PLANNER_FIRST: pyperplan first (old behavior).
     """
     if offline or os.environ.get("LLM_PLAN_OFFLINE"):
@@ -511,37 +549,44 @@ def get_subgoals(
             domain_text = f.read()
         config = _load_config()
         try:
-            gemini = _call_gemini_subgoals(domain_text, problem_str, model, temperature, config)
-        except Exception:
-            gemini = []
-        if not gemini:
+            llm_steps = _call_llm_subgoals(domain_text, problem_str, model, temperature, config)
+        except Exception as e:
+            print("Exception 1")
+            print(e)
+            llm_steps = []
+        if not llm_steps:
             return compute_subgoals(problem_str)
-        return _ensure_disk_goal_tail(gemini, problem_str)
+        return _ensure_disk_goal_tail(llm_steps, problem_str)
 
     with open(domain_path, "r") as f:
         domain_text = f.read()
     config = _load_config()
-    gemini: list[dict] = []
+    llm_steps: list[dict] = []
     try:
-        gemini = _call_gemini_subgoals(domain_text, problem_str, model, temperature, config)
-    except Exception:
-        gemini = []
+        llm_steps = _call_llm_subgoals(domain_text, problem_str, model, temperature, config)
+    except Exception as e:
+        print("Exception 2")
+        print(e)
+        llm_steps = []
 
-    if not gemini:
+    if not llm_steps:
         plan = run_pddl_planner(domain_path, problem_str)
         if plan:
             return plan_to_subgoals(plan, problem_str)
         return compute_subgoals(problem_str)
 
-    gemini = _ensure_disk_goal_tail(gemini, problem_str)
+    if llm_steps:
+        print("LLM subgoals generated successfully")
+        
+    llm_steps = _ensure_disk_goal_tail(llm_steps, problem_str)
 
     plan = run_pddl_planner(domain_path, problem_str)
     if plan:
         sym = plan_to_subgoals(plan, problem_str)
         if sym:
-            return _align_gemini_to_symbolic(gemini, sym)
+            return _align_llm_to_symbolic(llm_steps, sym)
 
-    return gemini
+    return llm_steps
 
 
 if __name__ == "__main__":

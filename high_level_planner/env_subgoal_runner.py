@@ -113,7 +113,7 @@ def main(argv=None):
     ap.add_argument("--offline", action="store_true", help="No API: BFS subgoals only (no pick/place)")
     ap.add_argument("--llm", action="store_true", help="Skip PDDL planner; use LLM only (fallback path)")
     ap.add_argument("--verbose", action="store_true", help="Print state summary and full PDDL problem")
-    ap.add_argument("--model", default="gemini-2.5-flash", help="Gemini model name")
+    ap.add_argument("--model", default="gemini-2.5-flash", help="LLM model name (gemini-* uses VertexAI; others use OpenAI-compatible endpoint)")
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=0, help="Random seed for env reset (--live only)")
     args = ap.parse_args(argv)
