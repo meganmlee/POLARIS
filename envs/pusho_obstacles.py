@@ -675,3 +675,59 @@ class PickSkillEnv(PushOWithObstaclesEnv):
         pose = sapien_utils.look_at(eye=[0.3, 0, 0.6], target=[-0.1, 0, 0.1])
         return CameraConfig("render_camera", pose=pose, width=512, height=512,
                             fov=1, near=0.01, far=100)
+
+@register_env("PushO-Scattered", max_episode_steps=2000)
+class PushOScatteredEnv(PushOWithObstaclesEnv):
+    """
+    PushO with exactly 10 obstacle cubes randomly scattered 
+    on the table using rejection sampling.
+    """
+    MIN_OBSTACLES: int = 10
+    MAX_OBSTACLES: int = 10
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
+        super()._initialize_episode(env_idx, options)
+
+
+@register_env("PushO-TrappedDisk", max_episode_steps=2000)
+class PushOTrappedDiskEnv(PushOWithObstaclesEnv):
+
+    MIN_OBSTACLES: int = 10
+    MAX_OBSTACLES: int = 10
+    
+    # Distance from the disk center to the perimeter line
+    PERIMETER_OFFSET: float = 0.1
+
+    def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
+        # Initialize disk and goal positions first
+        super()._initialize_episode(env_idx, options)
+        
+        with torch.device(self.device):
+            b = len(env_idx)
+            disk_pos = self.disk.pose.p[env_idx] # (b, 3)
+            q_id = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).expand(b, 4)
+
+            # Define the 8 relative XY offsets for a square ring around the center
+            # [(-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)]
+            offsets = []
+            for i in [-1, 0, 1]:
+                for j in [-1, 0, 1]:
+                    if i == 0 and j == 0: continue
+                    offsets.append((i * self.PERIMETER_OFFSET, j * self.PERIMETER_OFFSET))
+            
+            for i, cube in enumerate(self.obstacles):
+                half = self.OBSTACLE_SPECS[i][0]
+                
+                if i < 8:
+                    # Place cubes in the square perimeter
+                    rel_offset = torch.tensor(offsets[i], device=self.device)
+                    xy = disk_pos[:, :2] + rel_offset
+                else:
+                    # Place remaining 2 cubes randomly as "noise"
+                    xy = (torch.rand((b, 2), device=self.device) * 2 - 1) * self.TABLE_HALF
+                
+                xyz = torch.cat([xy, torch.full((b, 1), half, device=self.device)], dim=1)
+                self.obstacles[i].set_pose(Pose.create_from_pq(p=xyz, q=q_id))

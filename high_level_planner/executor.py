@@ -615,6 +615,7 @@ if __name__ == "__main__":
     ap.add_argument("--model",               default="gemini-2.5-flash")
     ap.add_argument("--skill",               default="ppo", choices=["mpc", "ppo", "auto"],
                     help="auto: MPC vs PPO preview metrics per subgoal")
+    ap.add_argument("--env-id",             default="PushO-WallObstacles-v1", choices=["PushO-WallObstacles-v1", "PushO-Scattered", "PushO-TrappedDisk"])
     ap.add_argument("--reach-checkpoint",    default="Reach", dest="reach_checkpoint",
                     help="Reach PPO checkpoint (required for --skill ppo or auto)")
     ap.add_argument("--reach-device",        default=None, dest="reach_device",
@@ -641,6 +642,7 @@ if __name__ == "__main__":
         model=args.model,
         render=args.render,
         skill=args.skill,
+        env_id=args.env_id,
         checkpoint=_resolve_checkpoint(args.reach_checkpoint),
         reach_device=args.reach_device,
         pick_checkpoint=_resolve_checkpoint(args.pick_checkpoint),
