@@ -566,20 +566,40 @@ class PickSkillEnv(PushOWithObstaclesEnv):
     # Obstacle half-sizes range 0.015–0.025, so 0.06 requires ~3–4 cm of lift.
     lift_threshold = 0.06
 
+    def _load_scene(self, options: dict):
+        super()._load_scene(options)
+        # Make the goal ring visible so it can highlight the pick target.
+        if self.goal_site in self._hidden_objects:
+            self._hidden_objects.remove(self.goal_site)
+
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         super()._initialize_episode(env_idx, options)
         with torch.device(self.device):
             b = len(env_idx)
             q_id   = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).expand(b, 4)
             park_p = torch.tensor([[2.0, 0.0, 0.05]], device=self.device).expand(b, 3)
-            park_pose = Pose.create_from_pq(p=park_p, q=q_id)
-            self.disk.set_pose(park_pose)
-            self.goal_site.set_pose(park_pose)
+            self.disk.set_pose(Pose.create_from_pq(p=park_p, q=q_id))
+
+            PICK_XY_LIMIT = 0.25
 
             if not hasattr(self, "pick_obstacle_idx") or self.pick_obstacle_idx.shape[0] != self.num_envs:
                 self.pick_obstacle_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-            self.pick_obstacle_idx[env_idx] = torch.randint(
-                len(self.obstacles), (b,), device=self.device)
+
+            all_pos = torch.stack([obs.pose.p for obs in self.obstacles], dim=0)  # (n_obs, num_envs, 3)
+            chosen = torch.randint(len(self.obstacles), (b,), device=self.device)
+            for _ in range(len(self.obstacles)):
+                pos = all_pos[chosen, env_idx]  # (b, 3)
+                out_of_reach = (pos[:, :2].abs() > PICK_XY_LIMIT).any(dim=1)
+                if not out_of_reach.any():
+                    break
+                reroll = torch.randint(len(self.obstacles), (b,), device=self.device)
+                chosen = torch.where(out_of_reach, reroll, chosen)
+            self.pick_obstacle_idx[env_idx] = chosen
+
+            # Place the goal ring flat over the chosen obstacle as a visual highlight.
+            chosen_pos = all_pos[self.pick_obstacle_idx[env_idx], env_idx].clone()
+            q_disk = torch.tensor(_DISK_QUAT, device=self.device).unsqueeze(0).expand(b, 4)
+            self.goal_site.set_pose(Pose.create_from_pq(p=chosen_pos, q=q_disk))
 
     def _get_pick_cube_pos(self) -> torch.Tensor:
         """Position of the selected pick obstacle for each env. Shape: (num_envs, 3)."""
@@ -626,7 +646,16 @@ class PickSkillEnv(PushOWithObstaclesEnv):
         q = self.agent.tcp.pose.q  # (N, 4) wxyz
         tcp_z_world_z = 1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 2] ** 2)
         upright_reward = -0.5 * (1.0 - tcp_z_world_z ** 2)
-        reward = reach_reward + pregrasp_reward + is_grasped + lift_reward * is_grasped + upright_reward
+        # Per-step action penalties: encourage small, stable motions.
+        # action layout for pd_ee_delta_pose: [dx, dy, dz, droll, dpitch, dyaw, gripper]
+        # Roll (3) and pitch (4) get a 5× higher penalty — large values destabilize
+        # the EE orientation for downstream skills.
+        translate_penalty     = 0.02 * torch.linalg.norm(action[:, :3], dim=1)
+        yaw_penalty       = 0.02 * action[:, 5].abs()
+        roll_pitch_penalty = 0.10 * action[:, 3:5].abs().sum(dim=1)
+        action_reg = translate_penalty + yaw_penalty + roll_pitch_penalty
+
+        reward = reach_reward + pregrasp_reward + is_grasped + lift_reward * is_grasped + upright_reward - action_reg
 
         # Once successful, override reward with a bonus minus a penalty for EE
         # movement. This teaches the policy to hold still after grasping rather
