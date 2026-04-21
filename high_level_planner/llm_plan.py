@@ -14,8 +14,6 @@ import warnings
 
 import numpy as np
 
-from openai import OpenAI
-
 warnings.filterwarnings("ignore", message=".*deprecated.*")
 
 GRID = 10
@@ -23,9 +21,9 @@ TABLE_BOUND = 0.30
 TILE_SIZE_M = (2.0 * TABLE_BOUND) / GRID
 
 NUM_OBSTACLES = 10
-NUM_PICKABLE = 5
+NUM_PICKABLE = 10
 
-VALID_SKILLS = frozenset({"reach", "push_disk", "pick", "place", "push_cube"})
+VALID_SKILLS = frozenset({"reach", "push_disk", "pick", "place"})
 
 
 def _region_to_name(idx: int) -> str:
@@ -108,13 +106,14 @@ def _region_layout_comment() -> str:
     )
 
 
-def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray, obstacle_regions: list) -> str:
+def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray, obstacle_regions: list, stuck_obstacles: set = None) -> str:
     rd = _xy_to_region(disk_xy[0], disk_xy[1])
     rg = _xy_to_region(goal_xy[0], goal_xy[1])
     re = _xy_to_region(ee_xy[0], ee_xy[1])
     obstacles = list(obstacle_regions)[:NUM_OBSTACLES]
     n_obstacles = len(obstacles)
     n_pickable = min(NUM_PICKABLE, n_obstacles)
+    stuck = stuck_obstacles or set()
     region_set = set(obstacles)
     region_names = [_region_to_name(i) for i in range(GRID * GRID)]
     objects = "robot1 - robot disk - disk " + " ".join(f"obstacle{i}" for i in range(n_obstacles)) + " - obstacle " + " ".join(region_names) + " - region"
@@ -122,21 +121,32 @@ def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray
         f"(robot-at robot1 {_region_to_name(re)})",
         f"(object-at disk {_region_to_name(rd)})",
         f"(goal-at {_region_to_name(rg)})",
+        "(hand-empty robot1)",
     ]
     for i in range(n_pickable):
-        init.append(f"(pickable obstacle{i})")
+        if i not in stuck:
+            init.append(f"(pickable obstacle{i})")
+        # stuck obstacles get no pickable/push-only predicate → treated as permanent walls
     for i in range(n_pickable, n_obstacles):
-        init.append(f"(push-only obstacle{i})")
+        if i not in stuck:
+            init.append(f"(push-only obstacle{i})")
     for i, r in enumerate(obstacles):
         init.append(f"(obstacle-at obstacle{i} {_region_to_name(r)})")
+    # (clear): cell has no obstacle — used by pick/place.
     for i in range(GRID * GRID):
         if i not in region_set:
             init.append(f"(clear {_region_to_name(i)})")
+    # (disk-clear): cell has a full 1-tile buffer around all obstacles — used only by push_disk.
+    disk_blocked_set = _expand_cells_by_1(region_set)
+    for i in range(GRID * GRID):
+        if i not in disk_blocked_set:
+            init.append(f"(disk-clear {_region_to_name(i)})")
     for a, b in _adjacent_pairs():
         init.append(f"(adjacent {_region_to_name(a)} {_region_to_name(b)})")
     goal = f"(object-at disk {_region_to_name(rg)})"
     path_disk_to_goal_cells = set(_bfs_path(rd, rg, set()))
-    obstacles_on_path = [i for i in range(n_obstacles) if obstacles[i] in path_disk_to_goal_cells]
+    disk_zone = _expand_cells_by_1(path_disk_to_goal_cells)
+    obstacles_on_path = [i for i in range(n_obstacles) if obstacles[i] in disk_zone]
     obstacle_list = ", ".join(f"obstacle{i}@{_region_to_name(obstacles[i])}" for i in range(n_obstacles))
     on_path_str = (
         f" Obstacles ON THE PATH (clear first): " + ", ".join(f"obstacle{i} at {_region_to_name(obstacles[i])}" for i in obstacles_on_path) + "."
@@ -145,7 +155,7 @@ def state_to_problem(disk_xy: np.ndarray, goal_xy: np.ndarray, ee_xy: np.ndarray
     pushonly_range = f"obstacle{n_pickable}..{n_obstacles - 1}" if n_pickable < n_obstacles else "none"
     scenario = (
         f"; robot={_region_to_name(re)}, disk={_region_to_name(rd)}, goal={_region_to_name(rg)}. Obstacles: {obstacle_list}. "
-        f"{pickable_range} pickable (pick+place); {pushonly_range} push-only (push_cube). "
+        f"{pickable_range} pickable (pick+place). " #; {pushonly_range} push-only (push_cube). "
         f"{on_path_str} "
         "Output: one line per subgoal, SKILL<TAB>STATE (one PDDL atom in parens)."
     )
@@ -193,6 +203,16 @@ def _adjacency():
     return adj
 
 
+def _expand_cells_by_1(cells: set) -> set:
+    """Return cells plus all their cardinal neighbors (disk ~3x3 needs 1-cell clearance)."""
+    adj = _adjacency()
+    expanded = set(cells)
+    for cell in cells:
+        for n in adj[cell]:
+            expanded.add(n)
+    return expanded
+
+
 def _bfs_path(start: int, goal: int, blocked: set) -> list:
     from collections import deque
 
@@ -232,17 +252,18 @@ def _clear_path_subgoals(disk_r: int, goal_r: int, blocked: set, problem_str: st
         return []
 
     path_cells = set(direct_path)
+    disk_zone = _expand_cells_by_1(path_cells)  # disk ~3x3: clear 1 cell around each path node
     positions, pickable, push_only = _parse_obstacle_info(problem_str)
     adj = _adjacency()
 
+    occupied = set(positions.values())  # tracks all taken drop spots to avoid duplicates
     subgoals = []
     for obstacle_name, obstacle_region in positions.items():
-        if obstacle_region not in path_cells:
+        if obstacle_region not in disk_zone:
             continue
 
         # BFS outward from the obstacle to find the nearest cell that is
-        # off-path, unblocked, and at least 2 steps away (so the dropped
-        # cube won't immediately re-block the path or sit in the wall).
+        # outside the disk zone, unblocked, not already occupied, and at least 2 steps away.
         drop = None
         seen_drop = {obstacle_region}
         frontier = [(obstacle_region, 0)]
@@ -252,15 +273,17 @@ def _clear_path_subgoals(disk_r: int, goal_r: int, blocked: set, problem_str: st
                 if n in seen_drop:
                     continue
                 seen_drop.add(n)
-                if n not in blocked and n not in path_cells and depth + 1 >= 2:
+                if n not in blocked and n not in disk_zone and n not in occupied and depth + 1 >= 2:
                     drop = n
                     break
                 frontier.append((n, depth + 1))
             if drop is not None:
                 break
-        # Fallback: any unblocked adjacent cell if BFS found nothing
+        # Fallback: any unblocked, unoccupied adjacent cell if BFS found nothing
         if drop is None:
-            drop = next((n for n in adj[obstacle_region] if n not in blocked), None)
+            drop = next((n for n in adj[obstacle_region] if n not in blocked and n not in occupied), None)
+        if drop is not None:
+            occupied.add(drop)
 
         subgoals.append({
             "skill": "reach",
@@ -272,15 +295,18 @@ def _clear_path_subgoals(disk_r: int, goal_r: int, blocked: set, problem_str: st
             if drop is not None:
                 subgoals.append({"skill": "place", "state": f"(obstacle-at {obstacle_name} {_region_to_name(drop)})"})
         elif obstacle_name in push_only and drop is not None:
-            subgoals.append({"skill": "push_cube", "state": f"(obstacle-at {obstacle_name} {_region_to_name(drop)})"})
+            print("    [SKIP] push_cube skill disabled but cube is labeled as push_only, dangerously skipping")
+        # elif obstacle_name in push_only and drop is not None:
+        #     subgoals.append({"skill": "push_cube", "state": f"(obstacle-at {obstacle_name} {_region_to_name(drop)})"})
 
     return subgoals
 
 
 def compute_subgoals(problem_str: str) -> list[dict]:
     disk_r, goal_r, robot_r, blocked = _parse_problem_regions(problem_str)
+    disk_blocked = _expand_cells_by_1(blocked)  # disk ~3x3: block cells adjacent to any obstacle
     path_robot_to_disk = _bfs_path(robot_r, disk_r, blocked)
-    path_disk_to_goal  = _bfs_path(disk_r, goal_r, blocked)
+    path_disk_to_goal  = _bfs_path(disk_r, goal_r, disk_blocked)
     subgoals = []
     if path_robot_to_disk and path_robot_to_disk[-1] == disk_r:
         subgoals.append({"skill": "reach", "state": f"(robot-at robot1 {_region_to_name(disk_r)})"})
@@ -288,12 +314,13 @@ def compute_subgoals(problem_str: str) -> list[dict]:
         for i in range(1, len(path_disk_to_goal)):
             subgoals.append({"skill": "push_disk", "state": f"(object-at disk {_region_to_name(path_disk_to_goal[i])})"})
     else:
-        # All routes blocked — emit clearing subgoals for blocks on the direct path,
+        # All routes blocked — emit clearing subgoals for blocks near the direct path,
         # then append push_disk steps using a BFS path with those blocks removed.
         subgoals.extend(_clear_path_subgoals(disk_r, goal_r, blocked, problem_str))
         direct_path = _bfs_path(disk_r, goal_r, set())
-        cleared_cells = set(direct_path) & blocked
-        new_path = _bfs_path(disk_r, goal_r, blocked - cleared_cells)
+        direct_zone = _expand_cells_by_1(set(direct_path))
+        cleared_cells = {c for c in blocked if c in direct_zone}
+        new_path = _bfs_path(disk_r, goal_r, _expand_cells_by_1(blocked - cleared_cells))
         if new_path and len(new_path) >= 2:
             subgoals.append({"skill": "reach", "state": f"(robot-at robot1 {_region_to_name(disk_r)})"})
             for i in range(1, len(new_path)):
@@ -305,41 +332,42 @@ def compute_subgoals(problem_str: str) -> list[dict]:
 
 def _push_disk_subgoals_only(problem_str: str) -> list[dict]:
     disk_r, goal_r, _, blocked = _parse_problem_regions(problem_str)
-    path = _bfs_path(disk_r, goal_r, blocked)
+    path = _bfs_path(disk_r, goal_r, _expand_cells_by_1(blocked))
     if len(path) < 2:
         return []
     return [{"skill": "push_disk", "state": f"(object-at disk {_region_to_name(path[i])})"} for i in range(1, len(path))]
 
 
-def run_pddl_planner(domain_path: str, problem_str: str, timeout: int = 60) -> str | None:
+def run_pddl_planner(domain_path: str, problem_str: str, timeout: int = 10) -> str | None:
+    # Create the temporary problem file
     with tempfile.NamedTemporaryFile(mode="w", suffix=".pddl", delete=False) as f:
         f.write(problem_str)
         problem_path = f.name
+
+    soln_path = problem_path + ".soln"
     try:
         subprocess.run(
-            ["pyperplan", domain_path, problem_path],
+            ["pyperplan", "-s", "gbf", "-H", "hff", domain_path, problem_path],
             capture_output=True,
             text=True,
             timeout=timeout,
+            check=True
         )
-        soln_path = problem_path + ".soln"
         if os.path.isfile(soln_path):
             with open(soln_path, "r") as f:
                 plan = f.read().strip()
-            try:
-                os.remove(soln_path)
-            except OSError:
-                pass
             return plan if plan else None
         return None
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except Exception as e:
+        print(f"[pyperplan] Failed to generate plan: {e}")
         return None
     finally:
-        try:
-            os.remove(problem_path)
-        except OSError:
-            pass
-
+        for path in [problem_path, soln_path]:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
 
 def plan_to_subgoals(plan_str: str, _problem_str: str) -> list[dict]:
     subgoals = []
@@ -363,9 +391,9 @@ def plan_to_subgoals(plan_str: str, _problem_str: str) -> list[dict]:
         if m:
             subgoals.append({"skill": "place", "state": f"(obstacle-at {m.group(1)} {m.group(2)})"})
             continue
-        m = re.match(r"\(push_cube robot1 (obstacle\d+) r_\d+_\d+ (r_\d+_\d+)\)", line)
-        if m:
-            subgoals.append({"skill": "push_cube", "state": f"(obstacle-at {m.group(1)} {m.group(2)})"})
+        # m = re.match(r"\(push_cube robot1 (obstacle\d+) r_\d+_\d+ (r_\d+_\d+)\)", line)
+        # if m:
+        #     subgoals.append({"skill": "push_cube", "state": f"(obstacle-at {m.group(1)} {m.group(2)})"})
     return subgoals
 
 
@@ -400,14 +428,16 @@ def _goal_region_from_problem(problem_str: str) -> str | None:
 
 def _build_subgoal_prompt(domain: str, problem_str: str) -> str:
     goal_region = _goal_region_from_problem(problem_str) or "r_0_0"
-    return f"""You decompose this Push-O task into ordered logical subgoals (milestones). The movable object is an O-shaped disk (circular puck), not a T-piece; PDDL uses the constant `disk` for it.
+    return f"""You decompose this Push-O task into ordered logical subgoals (milestones). The movable object is an O-shaped disk (circular puck); PDDL uses the constant `disk` for it.
 Each line is one milestone: the SKILL that achieves it, then TAB, then the target state as ONE PDDL atom in parentheses.
+When picking and placing the obstacles, try to move them a bit farther away from other obstacles as they may interfere with each other.
 
 Rules:
 - Order matters: earlier lines must be achievable before later ones.
+- The disk is ~3x the diameter of an obstacle cube (~1.5-tile radius). push_disk requires not just the destination cell to be (clear ?to), but ALL cells within 1 tile of the entire disk path to be free. For example, if the disk is going to r_4_4, all obstacles between r_3_3 and r_5_5 could block it.
 - End with: push_disk	(object-at disk {goal_region})
-- Before that push chain: if obstacles block the path, clear them (pick/place or push_cube), then reach to the disk's cell, then many push_disk steps (one grid cell per push_disk toward {goal_region}).
-- Skills: reach, push_disk, pick, place, push_cube. States: (robot-at robot1 r_i_j), (object-at disk r_i_j), (holding robot1 obstacleN), (obstacle-at obstacleN r_i_j). Never use tee or push_tee — only disk and push_disk.
+- Before that push chain: if obstacles block the path, clear them (pick/place), then reach to the disk's cell, then many push_disk steps (one grid cell per push_disk toward {goal_region}).
+- Skills: reach, push_disk, pick, place. States: (robot-at robot1 r_i_j), (object-at disk r_i_j), (holding robot1 obstacleN), (obstacle-at obstacleN r_i_j).
 
 Domain:
 {domain}
@@ -434,6 +464,7 @@ def _call_vertex_subgoals(prompt: str, model: str, temperature: float, config: d
         prompt,
         generation_config={"temperature": temperature, "max_output_tokens": 2048},
     )
+
     if not response.candidates or not response.candidates[0].content.parts:
         raise RuntimeError("LLM returned empty response")
     return response.candidates[0].content.parts[0].text.strip()
@@ -551,7 +582,7 @@ def get_subgoals(
         try:
             llm_steps = _call_llm_subgoals(domain_text, problem_str, model, temperature, config)
         except Exception as e:
-            print("Exception 1")
+            print("Exception during LLM Call:")
             print(e)
             llm_steps = []
         if not llm_steps:
@@ -565,7 +596,7 @@ def get_subgoals(
     try:
         llm_steps = _call_llm_subgoals(domain_text, problem_str, model, temperature, config)
     except Exception as e:
-        print("Exception 2")
+        print("Exception during LLM Call:")
         print(e)
         llm_steps = []
 
@@ -575,16 +606,13 @@ def get_subgoals(
             return plan_to_subgoals(plan, problem_str)
         return compute_subgoals(problem_str)
 
-    if llm_steps:
-        print("LLM subgoals generated successfully")
+    print("LLM subgoals generated successfully")
         
     llm_steps = _ensure_disk_goal_tail(llm_steps, problem_str)
 
-    plan = run_pddl_planner(domain_path, problem_str)
-    if plan:
-        sym = plan_to_subgoals(plan, problem_str)
-        if sym:
-            return _align_llm_to_symbolic(llm_steps, sym)
+    sym = compute_subgoals(problem_str)
+    if sym:
+        return _align_llm_to_symbolic(llm_steps, sym)
 
     return llm_steps
 

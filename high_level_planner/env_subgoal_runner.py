@@ -8,7 +8,7 @@ import numpy as np
 from llm_plan import GRID, TILE_SIZE_M, _xy_to_region, get_subgoals, state_to_problem
 
 
-def subgoals_from_wrapper(wrapper, obs, model: str = "gemini-2.5-flash", temperature: float = 0.0, offline: bool = False, use_llm_first: bool = False):
+def subgoals_from_wrapper(wrapper, obs, model: str = "gemini-2.5-flash", temperature: float = 0.0, offline: bool = False, use_llm_first: bool = False, stuck_obstacles: set = None):
     """
     Produce (PDDL_problem_str, subgoals) from an already-running wrapper+obs.
     Used by both run_from_env and the closed-loop executor.
@@ -30,11 +30,10 @@ def subgoals_from_wrapper(wrapper, obs, model: str = "gemini-2.5-flash", tempera
                 pos = np.asarray(pose.p, dtype=np.float64).reshape(-1)
                 if len(pos) >= 2:
                     r = _xy_to_region(float(pos[0]), float(pos[1]))
-                    if r not in blocked:
-                        blocked.append(r)
+                    blocked.append(r)  # preserve index: blocked[i] = region of root.obstacles[i]
 
     domain_path = os.path.join(os.path.dirname(__file__), "domain_pusho.pddl")
-    problem_str = state_to_problem(disk_xy, goal_xy, ee_xy, blocked)
+    problem_str = state_to_problem(disk_xy, goal_xy, ee_xy, blocked, stuck_obstacles=stuck_obstacles)
     subgoals = get_subgoals(
         domain_path,
         problem_str,

@@ -310,7 +310,7 @@ class PushOWithObstaclesEnv(PushOEnv):
                 cube.set_pose(pose)
 
 
-@register_env("Reach-WithObstacles-v1", max_episode_steps=200)
+@register_env("Reach-WithObstacles-v1", max_episode_steps=50)
 class ReachWithObstaclesEnv(PushOWithObstaclesEnv):
     """Move EE to a random goal above the table. Same scene as PushO-WithObstacles.
 
@@ -326,7 +326,7 @@ class ReachWithObstaclesEnv(PushOWithObstaclesEnv):
         super()._initialize_episode(env_idx, options)
         with torch.device(self.device):
             b = len(env_idx)
-            goal_xy = (torch.rand((b, 2), device=self.device) * 2 - 1) * 0.20
+            goal_xy = (torch.rand((b, 2), device=self.device) * 2 - 1) * 0.25
             goal_z  = torch.rand((b, 1), device=self.device) * 0.30 + 0.15
             if not hasattr(self, "goal_pos") or self.goal_pos.shape[0] != self.num_envs:
                 self.goal_pos = torch.zeros((self.num_envs, 3), device=self.device)
@@ -347,8 +347,27 @@ class ReachWithObstaclesEnv(PushOWithObstaclesEnv):
 
     def compute_dense_reward(self, obs, action, info):
         reach_reward  = 1.0 - torch.tanh(5.0 * info["dist_to_goal"])
-        success_bonus = info["success"].float() * 5.0
-        return reach_reward + success_bonus
+        q = self.agent.tcp.pose.q  # (N, 4) wxyz
+        tcp_z_world_z = 1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 2] ** 2)
+        upright_reward = -0.2 * (1.0 - tcp_z_world_z ** 2)
+        # Per-step action penalties: encourage small, stable motions.
+        # action layout for pd_ee_delta_pose: [dx, dy, dz, droll, dpitch, dyaw, gripper]
+        # Roll (3) and pitch (4) get a 5× higher penalty — large values destabilize
+        # the EE orientation for downstream skills.
+        translate_penalty     = 0.02 * torch.linalg.norm(action[:, :3], dim=1)
+        yaw_penalty       = 0.02 * action[:, 5].abs()
+        roll_pitch_penalty = 0.10 * action[:, 3:5].abs().sum(dim=1)
+        action_reg = translate_penalty + yaw_penalty + roll_pitch_penalty
+        reward = reach_reward + upright_reward - action_reg
+
+        # Once successful, override reward with a bonus minus a penalty for EE
+        # movement. This teaches the policy to hold still after grasping rather
+        # than continuing to drive into the table or out of the scene.
+        success = info["success"]
+        if success.any():
+            action_penalty = torch.linalg.norm(action[success, :7], dim=1)
+            reward[success] = 5.0 - 0.5 * action_penalty
+        return reward
 
     def compute_normalized_dense_reward(self, obs, action, info):
         return self.compute_dense_reward(obs, action, info) / 6.0
@@ -456,13 +475,16 @@ class PushCubeWithObstaclesEnv(PushOWithObstaclesEnv):
         reach_reward  = 1.0 - torch.tanh(5.0 * torch.norm(ee_pos - goal_cube_pos, dim=1))
         push_reward   = 1.0 - torch.tanh(5.0 * info["dist_cube_to_goal"])
         success_bonus = info["success"].float() * 5.0
-        return reach_reward + push_reward + success_bonus
+        q = self.agent.tcp.pose.q  # (N, 4) wxyz
+        tcp_z_world_z = 1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 2] ** 2)
+        upright_reward = -0.2 * (1.0 - tcp_z_world_z ** 2)
+        return reach_reward + push_reward + success_bonus + upright_reward
 
     def compute_normalized_dense_reward(self, obs, action, info):
         return self.compute_dense_reward(obs, action, info) / 7.0
 
 
-@register_env("PushO-WallObstacles-v1", max_episode_steps=200)
+@register_env("PushO-WallObstacles-v1", max_episode_steps=2000)
 class PushOWallObstaclesEnv(PushOWithObstaclesEnv):
     """PushO where all 10 obstacle cubes are fixed in a wall across the table.
 
@@ -487,10 +509,45 @@ class PushOWallObstaclesEnv(PushOWithObstaclesEnv):
     _TABLE_BOUND: float = 0.30
     _GRID: int = 10
 
+    # (disk_xy, goal_xy) in world metres. Computed via region_to_xy().
+    PRESETS: dict = {
+        #              disk (x, y)          goal (x, y)
+        "cross_center": ((-0.06, -0.21),  ( 0.06,  0.21)),
+        "same_side":    ((-0.09, -0.15),  ( 0.15, -0.21)),
+        "straight-1":   ((0, -0.15), (0, 0.15)),
+        "straight-2":   ((0.06, -0.15), (0.06, 0.15)),
+        "straight-3":   ((0.12, -0.15), (0.12, 0.15)),
+        "straight-4":   ((0.18, -0.15), (0.18, 0.15)),
+        "straight-5":   ((-0.06, -0.15), (-0.06, 0.15)),
+    }
+
+    # Set to a key from PRESETS to fix positions; None → random (default).
+    preset: str | None = "straight-5" #"same_side" #fails when placing cube 6
+
+
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         # Let PushOWithObstaclesEnv set up disk, goal, robot positions first,
         # then immediately reposition every obstacle into the wall.
         super()._initialize_episode(env_idx, options)
+
+        if self.preset is not None:
+            disk_xy_val, goal_xy_val = self.PRESETS[self.preset]
+            with torch.device(self.device):
+                b = len(env_idx)
+                q = torch.tensor(_DISK_QUAT, device=self.device).unsqueeze(0).expand(b, 4)
+
+                goal_xy = torch.tensor(list(goal_xy_val), device=self.device).unsqueeze(0).expand(b, 2)
+                goal_z  = torch.full((b, 1), self.disk_half_thickness * 0.4, device=self.device)
+                self.goal_pos[env_idx] = torch.cat([goal_xy, goal_z], dim=1)
+                self.goal_site.set_pose(Pose.create_from_pq(
+                    p=self.goal_pos[env_idx], q=q,
+                ))
+
+                disk_xy = torch.tensor(list(disk_xy_val), device=self.device).unsqueeze(0).expand(b, 2)
+                disk_z  = torch.full((b, 1), self.disk_half_thickness, device=self.device)
+                self.disk.set_pose(Pose.create_from_pq(
+                    p=torch.cat([disk_xy, disk_z], dim=1), q=q,
+                ))
         with torch.device(self.device):
             b = len(env_idx)
             q_id = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0)
@@ -509,7 +566,7 @@ class PushOWallObstaclesEnv(PushOWithObstaclesEnv):
                 cube.set_pose(pose)
 
 
-@register_env("PickSkillEnv", max_episode_steps=100)
+@register_env("PickSkillEnv", max_episode_steps=50)
 class PickSkillEnv(PushOWithObstaclesEnv):
     """Pick a randomly selected obstacle cube off the table.
 
@@ -525,14 +582,40 @@ class PickSkillEnv(PushOWithObstaclesEnv):
     # Obstacle half-sizes range 0.015–0.025, so 0.06 requires ~3–4 cm of lift.
     lift_threshold = 0.06
 
+    def _load_scene(self, options: dict):
+        super()._load_scene(options)
+        # Make the goal ring visible so it can highlight the pick target.
+        if self.goal_site in self._hidden_objects:
+            self._hidden_objects.remove(self.goal_site)
+
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         super()._initialize_episode(env_idx, options)
         with torch.device(self.device):
             b = len(env_idx)
+            q_id   = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).expand(b, 4)
+            park_p = torch.tensor([[2.0, 0.0, 0.05]], device=self.device).expand(b, 3)
+            self.disk.set_pose(Pose.create_from_pq(p=park_p, q=q_id))
+
+            PICK_XY_LIMIT = 0.25
+
             if not hasattr(self, "pick_obstacle_idx") or self.pick_obstacle_idx.shape[0] != self.num_envs:
                 self.pick_obstacle_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-            self.pick_obstacle_idx[env_idx] = torch.randint(
-                len(self.obstacles), (b,), device=self.device)
+
+            all_pos = torch.stack([obs.pose.p for obs in self.obstacles], dim=0)  # (n_obs, num_envs, 3)
+            chosen = torch.randint(len(self.obstacles), (b,), device=self.device)
+            for _ in range(len(self.obstacles)):
+                pos = all_pos[chosen, env_idx]  # (b, 3)
+                out_of_reach = (pos[:, :2].abs() > PICK_XY_LIMIT).any(dim=1)
+                if not out_of_reach.any():
+                    break
+                reroll = torch.randint(len(self.obstacles), (b,), device=self.device)
+                chosen = torch.where(out_of_reach, reroll, chosen)
+            self.pick_obstacle_idx[env_idx] = chosen
+
+            # Place the goal ring flat over the chosen obstacle as a visual highlight.
+            chosen_pos = all_pos[self.pick_obstacle_idx[env_idx], env_idx].clone()
+            q_disk = torch.tensor(_DISK_QUAT, device=self.device).unsqueeze(0).expand(b, 4)
+            self.goal_site.set_pose(Pose.create_from_pq(p=chosen_pos, q=q_disk))
 
     def _get_pick_cube_pos(self) -> torch.Tensor:
         """Position of the selected pick obstacle for each env. Shape: (num_envs, 3)."""
@@ -576,16 +659,91 @@ class PickSkillEnv(PushOWithObstaclesEnv):
         gripper_openness = finger_pos.sum(dim=1) / (2 * 0.04)  # 0=closed, 1=fully open
         near_cube   = (dist < 0.06).float()
         pregrasp_reward = near_cube * gripper_openness
+        q = self.agent.tcp.pose.q  # (N, 4) wxyz
+        tcp_z_world_z = 1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 2] ** 2)
+        upright_reward = -0.5 * (1.0 - tcp_z_world_z ** 2)
+        # Per-step action penalties: encourage small, stable motions.
+        # action layout for pd_ee_delta_pose: [dx, dy, dz, droll, dpitch, dyaw, gripper]
+        # Roll (3) and pitch (4) get a 5× higher penalty — large values destabilize
+        # the EE orientation for downstream skills.
+        translate_penalty     = 0.02 * torch.linalg.norm(action[:, :3], dim=1)
+        yaw_penalty       = 0.02 * action[:, 5].abs()
+        roll_pitch_penalty = 0.10 * action[:, 3:5].abs().sum(dim=1)
+        action_reg = translate_penalty + yaw_penalty + roll_pitch_penalty
 
-        reward = reach_reward + pregrasp_reward + is_grasped + lift_reward * is_grasped
-        reward[info["success"]] = 5.0
+        reward = reach_reward + pregrasp_reward + is_grasped + lift_reward * is_grasped + upright_reward - action_reg
+
+        # Once successful, override reward with a bonus minus a penalty for EE
+        # movement. This teaches the policy to hold still after grasping rather
+        # than continuing to drive into the table or out of the scene.
+        success = info["success"]
+        if success.any():
+            action_penalty = torch.linalg.norm(action[success, :7], dim=1)
+            reward[success] = 5.0 - 0.5 * action_penalty
+
         return reward
 
     def compute_normalized_dense_reward(self, obs: Any, action: torch.Tensor, info: Dict):
-        return self.compute_dense_reward(obs=obs, action=action, info=info) / 6.0
+        return self.compute_dense_reward(obs=obs, action=action, info=info) / 7.0
 
     @property
     def _default_human_render_camera_configs(self):
         pose = sapien_utils.look_at(eye=[0.3, 0, 0.6], target=[-0.1, 0, 0.1])
         return CameraConfig("render_camera", pose=pose, width=512, height=512,
                             fov=1, near=0.01, far=100)
+
+@register_env("PushO-Scattered", max_episode_steps=2000)
+class PushOScatteredEnv(PushOWithObstaclesEnv):
+    """
+    PushO with exactly 10 obstacle cubes randomly scattered 
+    on the table using rejection sampling.
+    """
+    MIN_OBSTACLES: int = 10
+    MAX_OBSTACLES: int = 10
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
+        super()._initialize_episode(env_idx, options)
+
+
+@register_env("PushO-TrappedDisk", max_episode_steps=2000)
+class PushOTrappedDiskEnv(PushOWithObstaclesEnv):
+
+    MIN_OBSTACLES: int = 10
+    MAX_OBSTACLES: int = 10
+    
+    # Distance from the disk center to the perimeter line
+    PERIMETER_OFFSET: float = 0.1
+
+    def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
+        # Initialize disk and goal positions first
+        super()._initialize_episode(env_idx, options)
+        
+        with torch.device(self.device):
+            b = len(env_idx)
+            disk_pos = self.disk.pose.p[env_idx] # (b, 3)
+            q_id = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).expand(b, 4)
+
+            # Define the 8 relative XY offsets for a square ring around the center
+            # [(-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)]
+            offsets = []
+            for i in [-1, 0, 1]:
+                for j in [-1, 0, 1]:
+                    if i == 0 and j == 0: continue
+                    offsets.append((i * self.PERIMETER_OFFSET, j * self.PERIMETER_OFFSET))
+            
+            for i, cube in enumerate(self.obstacles):
+                half = self.OBSTACLE_SPECS[i][0]
+                
+                if i < 8:
+                    # Place cubes in the square perimeter
+                    rel_offset = torch.tensor(offsets[i], device=self.device)
+                    xy = disk_pos[:, :2] + rel_offset
+                else:
+                    # Place remaining 2 cubes randomly as "noise"
+                    xy = (torch.rand((b, 2), device=self.device) * 2 - 1) * self.TABLE_HALF
+                
+                xyz = torch.cat([xy, torch.full((b, 1), half, device=self.device)], dim=1)
+                self.obstacles[i].set_pose(Pose.create_from_pq(p=xyz, q=q_id))

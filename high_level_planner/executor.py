@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.join(_ROOT, "skills"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "reach"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "pick"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "place"))
-sys.path.insert(0, os.path.join(_ROOT, "skills", "push_cube"))
+# sys.path.insert(0, os.path.join(_ROOT, "skills", "push_cube"))
 sys.path.insert(0, os.path.join(_ROOT, "skills", "push_o"))
 
 import envs  # noqa: F401 — registers ManiSkill envs
@@ -69,8 +69,8 @@ from pick_cube_ppo import _build_pick_obs, execute as pick_ppo_execute
 from pick_cube_mpc import PickMPCPreviewSession, execute as pick_mpc_execute
 from place_cube_ppo import _build_place_obs, execute as place_ppo_execute
 from place_cube_mpc import PlaceMPCPreviewSession, execute as place_mpc_execute
-from push_cube_ppo import _build_push_cube_obs, execute as push_cube_ppo_execute
-from push_cube_mpc import PushCubeMPCPreviewSession, execute as push_cube_mpc_execute
+# from push_cube_ppo import _build_push_cube_obs, execute as push_cube_ppo_execute
+# from push_cube_mpc import PushCubeMPCPreviewSession, execute as push_cube_mpc_execute
 from push_o_ppo import execute as push_o_ppo_execute
 from push_o_mpc import PushOMPCPreviewSession, execute as push_o_mpc_execute
 
@@ -139,20 +139,20 @@ def _place_ppo_policy_act(block_idx: int, goal_xyz: np.ndarray, agent, env, devi
     return policy_act
 
 
-def _push_cube_ppo_policy_act(block_idx: int, goal_xyz: np.ndarray, agent, env, device: str):
-    raw = env.unwrapped
-    obstacle = raw.obstacles[block_idx]
-    g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
-    action_low = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
-    action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
+# def _push_cube_ppo_policy_act(block_idx: int, goal_xyz: np.ndarray, agent, env, device: str):
+#     raw = env.unwrapped
+#     obstacle = raw.obstacles[block_idx]
+#     g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
+#     action_low = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
+#     action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
 
-    def policy_act(obs):
-        flat = _build_push_cube_obs(obs, raw, obstacle, g)
-        obs_t = torch.from_numpy(flat).float().unsqueeze(0).to(device)
-        with torch.no_grad():
-            return torch.clamp(agent.get_action(obs_t, deterministic=True), action_low, action_high)
+#     def policy_act(obs):
+#         flat = _build_push_cube_obs(obs, raw, obstacle, g)
+#         obs_t = torch.from_numpy(flat).float().unsqueeze(0).to(device)
+#         with torch.no_grad():
+#             return torch.clamp(agent.get_action(obs_t, deterministic=True), action_low, action_high)
 
-    return policy_act
+#     return policy_act
 
 
 def _push_o_ppo_policy_act(goal_xyz: np.ndarray, agent, env, device: str):
@@ -231,7 +231,7 @@ def run(
     checkpoint: str | None = None,
     pick_checkpoint: str | None = None,
     place_checkpoint: str | None = None,
-    push_cube_checkpoint: str | None = None,
+    # push_cube_checkpoint: str | None = None,
     push_o_checkpoint: str | None = None,
     reach_device: str | None = None,
     capture_video: bool = False,
@@ -273,13 +273,27 @@ def run(
     wrapper = ManiSkillPlanningWrapper(env, adapter=PushOTaskAdapter())
     obs, _ = wrapper.reset(seed=seed)
 
+    _init_ee = np.asarray(obs["extra"]["tcp_pose"], dtype=np.float32).reshape(-1)[:3].copy()
+
+    pick_fail_counts: dict[int, int] = {}
+    place_fail_counts: dict[int, int] = {}
+    stuck_obstacles: set[int] = set()
+
+    task_succeeded = False
     give_up = False
+    n_replans_used = 0
+    skill_fail_counts: dict[str, int] = {}
     for replan_i in range(max_replans):
+        n_replans_used = replan_i + 1
         if give_up:
             break
         print(f"\n--- Plan {replan_i + 1}/{max_replans} ---")
+        if stuck_obstacles:
+            print(f"  [info] treating as immovable: {sorted(f'obstacle{i}' for i in stuck_obstacles)}")
+        temperature = min(replan_i * 0.2, 1.0)
         problem_str, subgoals = subgoals_from_wrapper(
-            wrapper, obs, offline=offline, model=model
+            wrapper, obs, offline=offline, model=model, stuck_obstacles=stuck_obstacles,
+            temperature=temperature,
         )
 
         if not subgoals:
@@ -394,6 +408,10 @@ def run(
 
                 print(f"    → {'OK' if success else 'FAIL'}")
                 if not success:
+                    pick_fail_counts[block_idx] = pick_fail_counts.get(block_idx, 0) + 1
+                    if pick_fail_counts[block_idx] >= 2:
+                        stuck_obstacles.add(block_idx)
+                        print(f"    [WARN] pick obstacle{block_idx} failed {pick_fail_counts[block_idx]}x — marking as immovable")
                     skill_failed = True
                     break
 
@@ -411,117 +429,121 @@ def run(
                     if skill_agents["place"] is None:
                         skill_agents["place"] = load_agent(place_checkpoint, dev)
 
-                # Primary target first, then spread-out fallbacks from the planner.
-                _place_regions = [region] + place_fallback_candidates(region)
+                px, py = region_to_xy(region)
+                goal_xyz = np.array([px, py, 0.02], dtype=np.float32)
+                print(f"    → place cube{block_idx} at {np.round(goal_xyz, 3)}")
                 success = False
-                for _attempt, _preg in enumerate(_place_regions):
-                    px, py = region_to_xy(_preg)
-                    goal_xyz = np.array([px, py, 0.02], dtype=np.float32)
-                    _tag = "" if _attempt == 0 else f" [retry {_attempt} → {_preg}]"
-                    print(f"    → place cube{block_idx} at {np.round(goal_xyz, 3)}{_tag}")
+                force_mpc_place = skill == "auto" and place_fail_counts.get(block_idx, 0) >= 1
 
-                    if skill == "auto":
-                        raw_e = env.unwrapped
-                        g = goal_xyz.copy()
+                if force_mpc_place:
+                    print(f"    [retry] place cube{block_idx} failed before — forcing place_cube_mpc")
+                    success, obs = place_mpc_execute(env, obs, block_idx, goal_xyz, render=effective_render)
+                elif skill == "auto":
+                    raw_e = env.unwrapped
+                    g = goal_xyz.copy()
 
-                        def _place_prog(o, inf, _bi=block_idx, _g=g, _re=raw_e):
-                            cube = _re.obstacles[_bi].pose.p.cpu().numpy().reshape(3)
-                            return float(np.linalg.norm(cube[:2] - _g[:2]) + 0.3 * abs(cube[2] - _g[2]))
+                    def _place_prog(o, inf, _bi=block_idx, _g=g, _re=raw_e):
+                        cube = _re.obstacles[_bi].pose.p.cpu().numpy().reshape(3)
+                        return float(np.linalg.norm(cube[:2] - _g[:2]) + 0.3 * abs(cube[2] - _g[2]))
 
-                        mpc_sess = PlaceMPCPreviewSession(env, block_idx, goal_xyz)
-                        mpc_sess.reset()
-                        ms, mi = lookahead_rollout_score(
-                            wrapper, lambda o, _s=mpc_sess: _s.step_action(o), obs, _place_prog
-                        )
-                        ppo_act = _place_ppo_policy_act(block_idx, goal_xyz, skill_agents["place"], env, dev)
-                        rs, ri = lookahead_rollout_score(wrapper, ppo_act, obs, _place_prog)
-                        choice = select_reach_backend(ms, rs)
-                        method = "place_cube_mpc" if choice == "planner" else "place_cube_ppo"
-                        print(f"    [metrics] mpc={ms:.3f} {_fmt_m(mi)} | ppo={rs:.3f} {_fmt_m(ri)} → {method}")
-                        if choice == "planner":
-                            success, obs = place_mpc_execute(env, obs, block_idx, goal_xyz, render=effective_render)
-                        else:
-                            success, obs = place_ppo_execute(
-                                env, obs, block_idx, goal_xyz, checkpoint=place_checkpoint, render=effective_render, device=dev, agent=skill_agents["place"]
-                            )
-                    elif skill == "ppo":
+                    mpc_sess = PlaceMPCPreviewSession(env, block_idx, goal_xyz)
+                    mpc_sess.reset()
+                    ms, mi = lookahead_rollout_score(
+                        wrapper, lambda o, _s=mpc_sess: _s.step_action(o), obs, _place_prog
+                    )
+                    ppo_act = _place_ppo_policy_act(block_idx, goal_xyz, skill_agents["place"], env, dev)
+                    rs, ri = lookahead_rollout_score(wrapper, ppo_act, obs, _place_prog)
+                    choice = select_reach_backend(ms, rs)
+                    method = "place_cube_mpc" if choice == "planner" else "place_cube_ppo"
+                    print(f"    [metrics] mpc={ms:.3f} {_fmt_m(mi)} | ppo={rs:.3f} {_fmt_m(ri)} → {method}")
+                    if choice == "planner":
+                        success, obs = place_mpc_execute(env, obs, block_idx, goal_xyz, render=effective_render)
+                    else:
                         success, obs = place_ppo_execute(
                             env, obs, block_idx, goal_xyz, checkpoint=place_checkpoint, render=effective_render, device=dev, agent=skill_agents["place"]
                         )
-                    else:
-                        success, obs = place_mpc_execute(
-                            env, obs, block_idx, goal_xyz, render=effective_render
-                        )
+                elif skill == "ppo":
+                    success, obs = place_ppo_execute(
+                        env, obs, block_idx, goal_xyz, checkpoint=place_checkpoint, render=effective_render, device=dev, agent=skill_agents["place"]
+                    )
+                else:
+                    success, obs = place_mpc_execute(
+                        env, obs, block_idx, goal_xyz, render=effective_render
+                    )
 
-                    print(f"    → {'OK' if success else 'FAIL'}")
-                    if success:
-                        break
+                print(f"    → {'OK' if success else 'FAIL'}")
 
                 if not success:
-                    print("    [WARN] place failed on all candidates — opening gripper and continuing")
+                    place_fail_counts[block_idx] = place_fail_counts.get(block_idx, 0) + 1
+                    print("    [WARN] place failed — opening gripper and replanning")
                     act_dim = env.action_space.shape[0]
                     open_action = np.zeros(act_dim, dtype=np.float32)
                     open_action[-1] = 1.0  # open gripper
                     for _ in range(15):
                         obs, _, _, _, _ = env.step(open_action)
+                    skill_failed = True
+                    break
 
             elif sg_skill == "push_cube":
-                if block_idx is None or region is None:
-                    print(f"    [WARN] could not parse block/region from: {state!r}")
-                    skill_failed = True
-                    break
-                x, y = region_to_xy(region)
-                goal_xyz = np.array([x, y, 0.0], dtype=np.float32)
-                print(f"    → push_cube obstacle{block_idx} to {np.round(goal_xyz, 3)}")
+                print("    [SKIP] push_cube skill disabled — re-planning")
+                skill_failed = True
+                break
+                # if block_idx is None or region is None:
+                #     print(f"    [WARN] could not parse block/region from: {state!r}")
+                #     skill_failed = True
+                #     break
+                # x, y = region_to_xy(region)
+                # goal_xyz = np.array([x, y, 0.0], dtype=np.float32)
+                # print(f"    → push_cube obstacle{block_idx} to {np.round(goal_xyz, 3)}")
 
-                if skill == "auto":
-                    if push_cube_checkpoint is None:
-                        print("    [SKIP] push_cube: no --push-cube-checkpoint provided — re-planning")
-                        skill_failed = True
-                        break
-                    if skill_agents["push_cube"] is None:
-                        skill_agents["push_cube"] = load_agent(push_cube_checkpoint, dev)
-                    g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
-                    raw_e = env.unwrapped
+                # if skill == "auto":
+                #     if push_cube_checkpoint is None:
+                #         print("    [SKIP] push_cube: no --push-cube-checkpoint provided — re-planning")
+                #         skill_failed = True
+                #         break
+                #     if skill_agents["push_cube"] is None:
+                #         skill_agents["push_cube"] = load_agent(push_cube_checkpoint, dev)
+                #     g = np.asarray(goal_xyz, dtype=np.float32).reshape(3)
+                #     raw_e = env.unwrapped
 
-                    def _pc_prog(o, inf):
-                        cube = raw_e.obstacles[block_idx].pose.p.cpu().numpy().reshape(3)
-                        return float(np.linalg.norm(cube[:2] - g[:2]))
+                #     def _pc_prog(o, inf):
+                #         cube = raw_e.obstacles[block_idx].pose.p.cpu().numpy().reshape(3)
+                #         return float(np.linalg.norm(cube[:2] - g[:2]))
 
-                    mpc_sess = PushCubeMPCPreviewSession(env, block_idx, goal_xyz)
-                    mpc_sess.reset()
-                    ms, mi = lookahead_rollout_score(
-                        wrapper, lambda o: mpc_sess.step_action(o), obs, _pc_prog
-                    )
-                    ppo_act = _push_cube_ppo_policy_act(block_idx, goal_xyz, skill_agents["push_cube"], env, dev)
-                    rs, ri = lookahead_rollout_score(wrapper, ppo_act, obs, _pc_prog)
-                    choice = select_reach_backend(ms, rs)
-                    method = "push_cube_mpc" if choice == "planner" else "push_cube_ppo"
-                    print(f"    [metrics] mpc={ms:.3f} {_fmt_m(mi)} | ppo={rs:.3f} {_fmt_m(ri)} → {method}")
-                    if choice == "planner":
-                        success, obs = push_cube_mpc_execute(env, obs, block_idx, goal_xyz, render=effective_render)
-                    else:
-                        success, obs = push_cube_ppo_execute(
-                            env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=effective_render, device=dev, agent=skill_agents["push_cube"]
-                        )
-                elif skill == "ppo":
-                    if push_cube_checkpoint is None:
-                        print("    [SKIP] push_cube: no --push-cube-checkpoint provided — re-planning")
-                        skill_failed = True
-                        break
-                    if skill_agents["push_cube"] is None:
-                        skill_agents["push_cube"] = load_agent(push_cube_checkpoint, dev)
-                    success, obs = push_cube_ppo_execute(
-                        env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=effective_render, device=dev, agent=skill_agents["push_cube"]
-                    )
-                else:
-                    success, obs = push_cube_mpc_execute(
-                        env, obs, block_idx, goal_xyz, render=effective_render
-                    )
-                print(f"    → {'OK' if success else 'FAIL'}")
-                if not success:
-                    skill_failed = True
-                    break
+                #     mpc_sess = PushCubeMPCPreviewSession(env, block_idx, goal_xyz)
+                #     mpc_sess.reset()
+                #     ms, mi = lookahead_rollout_score(
+                #         wrapper, lambda o: mpc_sess.step_action(o), obs, _pc_prog
+                #     )
+                #     ppo_act = _push_cube_ppo_policy_act(block_idx, goal_xyz, skill_agents["push_cube"], env, dev)
+                #     rs, ri = lookahead_rollout_score(wrapper, ppo_act, obs, _pc_prog)
+                #     choice = select_reach_backend(ms, rs)
+                #     method = "push_cube_mpc" if choice == "planner" else "push_cube_ppo"
+                #     print(f"    [metrics] mpc={ms:.3f} {_fmt_m(mi)} | ppo={rs:.3f} {_fmt_m(ri)} → {method}")
+                #     if choice == "planner":
+                #         success, obs = push_cube_mpc_execute(env, obs, block_idx, goal_xyz, render=effective_render)
+                #     else:
+                #         success, obs = push_cube_ppo_execute(
+                #             env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=effective_render, device=dev, agent=skill_agents["push_cube"]
+                #         )
+                # elif skill == "ppo":
+                #     if push_cube_checkpoint is None:
+                #         print("    [SKIP] push_cube: no --push-cube-checkpoint provided — re-planning")
+                #         skill_failed = True
+                #         break
+                #     if skill_agents["push_cube"] is None:
+                #         skill_agents["push_cube"] = load_agent(push_cube_checkpoint, dev)
+                #     success, obs = push_cube_ppo_execute(
+                #         env, obs, block_idx, goal_xyz, checkpoint=push_cube_checkpoint, render=effective_render, device=dev, agent=skill_agents["push_cube"]
+                #     )
+                # else:
+                #     success, obs = push_cube_mpc_execute(
+                #         env, obs, block_idx, goal_xyz, render=effective_render
+                #     )
+                # print(f"    → {'OK' if success else 'FAIL'}")
+                # if not success:
+                #     skill_failed = True
+                #     break
 
             elif sg_skill == "push_disk":
                 if region is None:
@@ -584,24 +606,33 @@ def run(
                 skill_failed = True
                 break
 
-        if not skill_failed:
+        if skill_failed:
+            skill_fail_counts[sg_skill] = skill_fail_counts.get(sg_skill, 0) + 1
+        else:
             print("All subgoals executed successfully.")
+            task_succeeded = True
             break
 
     if capture_video:
         env.save_video()
     wrapper.close()
+    return {
+        "success": task_succeeded,
+        "n_replans": n_replans_used,
+        "skill_fail_counts": skill_fail_counts,
+    }
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed",                type=int,   default=0)
-    ap.add_argument("--max_replans",         type=int,   default=15)
+    ap.add_argument("--max_replans",         type=int,   default=5)
     ap.add_argument("--offline",             action="store_true")
     ap.add_argument("--render",              action="store_true", help="Open a viewer window")
     ap.add_argument("--model",               default="gemini-2.5-flash")
     ap.add_argument("--skill",               default="ppo", choices=["mpc", "ppo", "auto"],
                     help="auto: MPC vs PPO preview metrics per subgoal")
+    ap.add_argument("--env-id",             default="PushO-WallObstacles-v1", choices=["PushO-WallObstacles-v1", "PushO-Scattered", "PushO-TrappedDisk"])
     ap.add_argument("--reach-checkpoint",    default="Reach", dest="reach_checkpoint",
                     help="Reach PPO checkpoint (required for --skill ppo or auto)")
     ap.add_argument("--reach-device",        default=None, dest="reach_device",
@@ -610,8 +641,8 @@ if __name__ == "__main__":
                     help="Pick skill PPO checkpoint")
     ap.add_argument("--place-checkpoint",    default="PlaceSkill", dest="place_checkpoint",
                     help="Place skill PPO checkpoint")
-    ap.add_argument("--push-cube-checkpoint", default="PushCube", dest="push_cube_checkpoint",
-                    help="Push-cube skill PPO checkpoint")
+    # ap.add_argument("--push-cube-checkpoint", default="PushCube", dest="push_cube_checkpoint",
+    #                 help="Push-cube skill PPO checkpoint")
     ap.add_argument("--push-o-checkpoint", default="PushO", dest="push_o_checkpoint",
                     help="Push-O skill PPO checkpoint")
     ap.add_argument("--capture-video",     action="store_true", dest="capture_video",
@@ -621,20 +652,22 @@ if __name__ == "__main__":
     args = ap.parse_args()
     if args.skill in ("ppo", "auto") and args.reach_checkpoint is None:
         ap.error("--reach-checkpoint is required when using --skill ppo or auto")
-    run(
+    result = run(
         seed=args.seed,
         max_replans=args.max_replans,
         offline=args.offline,
         model=args.model,
         render=args.render,
         skill=args.skill,
+        env_id=args.env_id,
         checkpoint=_resolve_checkpoint(args.reach_checkpoint),
         reach_device=args.reach_device,
         pick_checkpoint=_resolve_checkpoint(args.pick_checkpoint),
         place_checkpoint=_resolve_checkpoint(args.place_checkpoint),
-        push_cube_checkpoint=_resolve_checkpoint(args.push_cube_checkpoint),
+        # push_cube_checkpoint=_resolve_checkpoint(args.push_cube_checkpoint),
         push_o_checkpoint=_resolve_checkpoint(args.push_o_checkpoint),
         capture_video=args.capture_video,
         video_dir=args.video_dir,
     )
+    print(f"\n[result] success={result['success']}  replans={result['n_replans']}  skill_fails={result['skill_fail_counts']}")
 

@@ -1,0 +1,955 @@
+{
+  "mpc": {
+    "PushO-WallObstacles-v1": {
+      "success": [],
+      "elapsed_s": [],
+      "n_replans": [],
+      "skill_fail_counts": []
+    },
+    "PushO-Scattered": {
+      "success": [
+        false,
+        false,
+        true,
+        false,
+        true,
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        false,
+        true,
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true
+      ],
+      "elapsed_s": [
+        60.4,
+        59.45,
+        24.67,
+        56.44,
+        11.68,
+        11.27,
+        56.79,
+        58.25,
+        55.61,
+        55.76,
+        57.66,
+        55.81,
+        58.13,
+        58.82,
+        62.01,
+        12.15,
+        11.6,
+        58.99,
+        11.74,
+        57.58,
+        61.01,
+        54.42,
+        12.4,
+        57.15,
+        56.5,
+        64.2,
+        21.21,
+        62.05,
+        60.33,
+        13.79,
+        62.5,
+        11.76,
+        61.86,
+        10.55,
+        58.83,
+        57.76,
+        10.94,
+        11.39,
+        21.74,
+        10.56,
+        61.24,
+        59.77,
+        60.07,
+        43.79,
+        59.34,
+        56.76,
+        58.78,
+        59.19,
+        11.97,
+        11.49
+      ],
+      "n_replans": [
+        5,
+        5,
+        2,
+        5,
+        1,
+        1,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        1,
+        1,
+        5,
+        1,
+        5,
+        5,
+        5,
+        1,
+        5,
+        5,
+        5,
+        2,
+        5,
+        5,
+        1,
+        5,
+        1,
+        5,
+        1,
+        5,
+        5,
+        1,
+        1,
+        2,
+        1,
+        5,
+        5,
+        5,
+        4,
+        5,
+        5,
+        5,
+        5,
+        1,
+        1
+      ],
+      "skill_fail_counts": [
+        {
+          "push_disk": 5
+        },
+        {
+          "place": 5
+        },
+        {
+          "push_disk": 1
+        },
+        {
+          "push_disk": 5
+        },
+        {},
+        {},
+        {
+          "push_disk": 5
+        },
+        {
+          "place": 1,
+          "push_disk": 4
+        },
+        {
+          "push_disk": 5
+        },
+        {
+          "place": 1,
+          "push_disk": 4
+        },
+        {
+          "push_disk": 5
+        },
+        {
+          "push_disk": 5
+        },
+        {
+          "push_disk": 5
+        },
+        {
+          "push_disk": 3,
+          "pick": 2
+        },
+        {
+          "push_disk": 5
+        },
+        {},
+        {},
+        {
+          "push_disk": 5
+        },
+        {},
+        {
+          "push_disk": 1,
+          "reach": 4
+        },
+        {
+          "push_disk": 5
+        },
+        {
+          "push_disk": 5
+        },
+        {},
+        {
+          "push_disk": 1,
+          "reach": 4
+        },
+        {
+          "push_disk": 5
+        },
+        {
+          "place": 3,
+          "pick": 2
+        },
+        {
+          "push_disk": 1
+        },
+        {
+          "place": 4,
+          "pick": 1
+        },
+        {
+          "push_disk": 5
+        },
+        {},
+        {
+          "place": 5
+        },
+        {},
+        {
+          "place": 2,
+          "pick": 1,
+          "push_disk": 2
+        },
+        {},
+        {
+          "push_disk": 5
+        },
+        {
+          "push_disk": 5
+        },
+        {},
+        {},
+        {
+          "push_disk": 1
+        },
+        {},
+        {
+          "push_disk": 5
+        },
+        {
+          "pick": 1,
+          "push_disk": 1,
+          "reach": 3
+        },
+        {
+          "push_disk": 1,
+          "place": 1,
+          "reach": 3
+        },
+        {
+          "push_disk": 1,
+          "reach": 2
+        },
+        {
+          "push_disk": 5
+        },
+        {
+          "push_disk": 1,
+          "reach": 4
+        },
+        {
+          "push_disk": 5
+        },
+        {
+          "push_disk": 2,
+          "pick": 3
+        },
+        {},
+        {}
+      ]
+    },
+    "PushO-TrappedDisk": {
+      "success": [],
+      "elapsed_s": [],
+      "n_replans": [],
+      "skill_fail_counts": []
+    }
+  },
+  "ppo": {
+    "PushO-WallObstacles-v1": {
+      "success": [],
+      "elapsed_s": [],
+      "n_replans": [],
+      "skill_fail_counts": []
+    },
+    "PushO-Scattered": {
+      "success": [
+        false,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        false,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+        false,
+        false,
+        false,
+        false,
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true
+      ],
+      "elapsed_s": [
+        62.54,
+        59.74,
+        33.56,
+        56.38,
+        21.74,
+        61.39,
+        10.02,
+        58.12,
+        59.4,
+        46.86,
+        11.02,
+        57.1,
+        45.32,
+        34.44,
+        45.94,
+        54.59,
+        58.73,
+        56.96,
+        10.93,
+        10.19,
+        11.04,
+        10.93,
+        11.26,
+        10.88,
+        11.14,
+        60.46,
+        10.38,
+        58.01,
+        58.19,
+        59.16,
+        58.9,
+        9.96,
+        60.05,
+        10.52,
+        10.23,
+        10.26,
+        20.66,
+        10.61,
+        9.99,
+        10.69,
+        11.09,
+        23.04,
+        61.47,
+        10.66,
+        10.74,
+        22.48,
+        10.49,
+        60.8,
+        23.08,
+        19.0
+      ],
+      "n_replans": [
+        5,
+        5,
+        3,
+        5,
+        2,
+        5,
+        1,
+        5,
+        5,
+        4,
+        1,
+        5,
+        4,
+        3,
+        4,
+        5,
+        5,
+        5,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        5,
+        1,
+        5,
+        5,
+        5,
+        5,
+        1,
+        5,
+        1,
+        1,
+        1,
+        2,
+        1,
+        1,
+        1,
+        1,
+        2,
+        5,
+        1,
+        1,
+        2,
+        1,
+        5,
+        2,
+        2
+      ],
+      "skill_fail_counts": [
+        {
+          "pick": 3,
+          "push_disk": 2
+        },
+        {
+          "place": 2,
+          "push_disk": 3
+        },
+        {
+          "place": 2
+        },
+        {
+          "pick": 1,
+          "push_disk": 4
+        },
+        {
+          "push_disk": 1
+        },
+        {
+          "place": 2,
+          "pick": 1,
+          "push_disk": 2
+        },
+        {},
+        {
+          "place": 4,
+          "pick": 1
+        },
+        {
+          "push_disk": 5
+        },
+        {
+          "place": 1,
+          "pick": 1,
+          "push_disk": 1
+        },
+        {},
+        {
+          "push_disk": 5
+        },
+        {
+          "place": 2,
+          "pick": 1
+        },
+        {
+          "pick": 2
+        },
+        {
+          "place": 1,
+          "push_disk": 1,
+          "pick": 1
+        },
+        {
+          "pick": 1,
+          "push_disk": 4
+        },
+        {
+          "pick": 4,
+          "push_disk": 1
+        },
+        {
+          "push_disk": 5
+        },
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {
+          "pick": 1,
+          "place": 4
+        },
+        {},
+        {
+          "pick": 2,
+          "place": 1,
+          "reach": 2
+        },
+        {
+          "place": 2,
+          "pick": 3
+        },
+        {
+          "pick": 2,
+          "push_disk": 1,
+          "reach": 2
+        },
+        {
+          "place": 2,
+          "pick": 2,
+          "push_disk": 1
+        },
+        {},
+        {
+          "place": 5
+        },
+        {},
+        {},
+        {},
+        {
+          "place": 1
+        },
+        {},
+        {},
+        {},
+        {},
+        {
+          "place": 1
+        },
+        {
+          "push_disk": 1,
+          "pick": 4
+        },
+        {},
+        {},
+        {
+          "place": 1
+        },
+        {},
+        {
+          "pick": 2,
+          "push_disk": 1,
+          "reach": 2
+        },
+        {
+          "pick": 1
+        },
+        {
+          "push_disk": 1
+        }
+      ]
+    },
+    "PushO-TrappedDisk": {
+      "success": [],
+      "elapsed_s": [],
+      "n_replans": [],
+      "skill_fail_counts": []
+    }
+  },
+  "auto": {
+    "PushO-WallObstacles-v1": {
+      "success": [],
+      "elapsed_s": [],
+      "n_replans": [],
+      "skill_fail_counts": []
+    },
+    "PushO-Scattered": {
+      "success": [
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+        false,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true,
+        false,
+        false,
+        true,
+        false,
+        true,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true
+      ],
+      "elapsed_s": [
+        60.05,
+        65.73,
+        38.98,
+        36.44,
+        24.02,
+        14.11,
+        58.8,
+        35.15,
+        25.86,
+        24.11,
+        49.84,
+        61.8,
+        48.15,
+        60.17,
+        47.81,
+        36.58,
+        62.46,
+        25.46,
+        11.99,
+        11.89,
+        48.23,
+        23.9,
+        35.45,
+        64.12,
+        22.99,
+        29.27,
+        11.64,
+        66.73,
+        64.81,
+        39.82,
+        63.47,
+        24.12,
+        66.52,
+        59.49,
+        11.83,
+        26.5,
+        24.33,
+        24.28,
+        21.5,
+        11.39,
+        23.96,
+        61.48,
+        61.18,
+        11.22,
+        22.9,
+        23.74,
+        26.69,
+        62.52,
+        24.9,
+        25.24
+      ],
+      "n_replans": [
+        5,
+        5,
+        3,
+        3,
+        2,
+        1,
+        5,
+        3,
+        2,
+        2,
+        4,
+        5,
+        4,
+        5,
+        4,
+        3,
+        5,
+        2,
+        1,
+        1,
+        4,
+        2,
+        3,
+        5,
+        2,
+        2,
+        1,
+        5,
+        5,
+        3,
+        5,
+        2,
+        5,
+        5,
+        1,
+        2,
+        2,
+        2,
+        2,
+        1,
+        2,
+        5,
+        5,
+        1,
+        2,
+        2,
+        2,
+        5,
+        2,
+        2
+      ],
+      "skill_fail_counts": [
+        {
+          "place": 2,
+          "pick": 2
+        },
+        {
+          "pick": 2,
+          "place": 2,
+          "reach": 1
+        },
+        {
+          "place": 2
+        },
+        {
+          "place": 2
+        },
+        {
+          "place": 1
+        },
+        {},
+        {
+          "push_disk": 5
+        },
+        {
+          "place": 2
+        },
+        {
+          "place": 1
+        },
+        {
+          "place": 1
+        },
+        {
+          "place": 3
+        },
+        {
+          "place": 1,
+          "push_disk": 4
+        },
+        {
+          "place": 3
+        },
+        {
+          "pick": 2,
+          "place": 1,
+          "reach": 2
+        },
+        {
+          "place": 2,
+          "push_disk": 1
+        },
+        {
+          "place": 2
+        },
+        {
+          "place": 1,
+          "pick": 1,
+          "push_disk": 3
+        },
+        {
+          "push_disk": 1
+        },
+        {},
+        {},
+        {
+          "place": 2,
+          "push_disk": 1
+        },
+        {
+          "place": 1
+        },
+        {
+          "place": 2
+        },
+        {
+          "push_disk": 2,
+          "place": 1,
+          "reach": 2
+        },
+        {
+          "push_disk": 1
+        },
+        {
+          "place": 1
+        },
+        {},
+        {
+          "place": 2,
+          "pick": 2,
+          "reach": 1
+        },
+        {
+          "place": 2,
+          "push_disk": 3
+        },
+        {
+          "place": 2
+        },
+        {
+          "place": 2,
+          "pick": 1,
+          "push_disk": 2
+        },
+        {
+          "place": 1
+        },
+        {
+          "place": 4,
+          "pick": 1
+        },
+        {
+          "push_disk": 2,
+          "reach": 3
+        },
+        {},
+        {
+          "place": 1
+        },
+        {
+          "place": 1
+        },
+        {
+          "push_disk": 1
+        },
+        {
+          "push_disk": 1
+        },
+        {},
+        {
+          "place": 1
+        },
+        {
+          "place": 3,
+          "pick": 1,
+          "push_disk": 1
+        },
+        {
+          "push_disk": 1,
+          "pick": 1,
+          "reach": 3
+        },
+        {},
+        {
+          "push_disk": 1
+        },
+        {
+          "place": 1
+        },
+        {
+          "place": 1
+        },
+        {
+          "place": 2,
+          "pick": 1,
+          "push_disk": 2
+        },
+        {
+          "place": 1
+        },
+        {
+          "place": 1
+        }
+      ]
+    },
+    "PushO-TrappedDisk": {
+      "success": [],
+      "elapsed_s": [],
+      "n_replans": [],
+      "skill_fail_counts": []
+    }
+  }
+}
