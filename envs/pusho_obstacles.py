@@ -7,6 +7,7 @@ import numpy as np
 import sapien
 import torch
 import mani_skill.envs  # noqa: F401
+from envs.utils import MIN_OBSTACLE_CLEARANCE, sample_nonoverlapping_xy
 from skills.utils import (
     PickCriteria,
     PushCubeCriteria,
@@ -130,15 +131,9 @@ class PushOEnv(BaseEnv):
                 self.goal_pos = torch.zeros((self.num_envs, 3), device=self.device)
             self.goal_pos[env_idx] = torch.cat([goal_xy, goal_z], dim=1)
 
-            disk_xy = torch.zeros((b, 2), device=self.device)
-            for i in range(b):
-                for _ in range(50):
-                    candidate = (torch.rand(2, device=self.device) * 2 - 1) * self.DISK_SPAWN_HALF
-                    if torch.norm(candidate - goal_xy[i]) >= self.MIN_DISK_GOAL_DIST:
-                        disk_xy[i] = candidate
-                        break
-                else:
-                    disk_xy[i] = -goal_xy[i].clamp(-self.DISK_SPAWN_HALF, self.DISK_SPAWN_HALF)
+            disk_xy = sample_nonoverlapping_xy(
+                b, self.DISK_SPAWN_HALF, [goal_xy], self.MIN_DISK_GOAL_DIST, self.device
+            )
 
             disk_z   = torch.full((b, 1), self.disk_half_thickness, device=self.device)
             disk_xyz = torch.cat([disk_xy, disk_z], dim=1)
@@ -252,58 +247,32 @@ class PushOWithObstaclesEnv(PushOEnv):
     MAX_OBSTACLES: int = 10
     # Table half-extent (must stay within this XY radius of origin)
     TABLE_HALF: float = 0.25
-    # Minimum distance between an obstacle and the disk centre
-    MIN_DIST_FROM_DISK: float = 0.06
-    # Minimum distance between two obstacles
-    MIN_DIST_BETWEEN: float = 0.05
 
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         super()._initialize_episode(env_idx, options)
         with torch.device(self.device):
             b = len(env_idx)
-            disk_pos = self.disk.pose.p[env_idx]  # (b, 3)
             q_id = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0)
 
-            # Randomly choose how many obstacles to place this episode (same count for all envs in batch)
             n_active = int(torch.randint(self.MIN_OBSTACLES, self.MAX_OBSTACLES + 1, (1,)).item())
 
-            placed_xy: list[torch.Tensor] = []  # (b, 2) tensors for collision checking
-
+            # Seed forbidden zones with disk and goal so all obstacles clear both.
+            forbidden: list[torch.Tensor] = [
+                self.disk.pose.p[env_idx, :2],
+                self.goal_pos[env_idx, :2],
+            ]
             for i, cube in enumerate(self.obstacles):
                 half = self.OBSTACLE_SPECS[i][0]
-
                 if i < n_active:
-                    # Sample random XY positions with rejection for each env independently
-                    xy = torch.zeros((b, 2), device=self.device)
-                    for env_i in range(b):
-                        disk_xy = disk_pos[env_i, :2]
-                        for _ in range(50):
-                            candidate = (torch.rand(2, device=self.device) * 2 - 1) * self.TABLE_HALF
-                            # Reject if too close to disk
-                            if torch.norm(candidate - disk_xy) < self.MIN_DIST_FROM_DISK:
-                                continue
-                            # Reject if too close to any already-placed obstacle
-                            too_close = any(
-                                torch.norm(candidate - p[env_i]) < self.MIN_DIST_BETWEEN
-                                for p in placed_xy
-                            )
-                            if too_close:
-                                continue
-                            xy[env_i] = candidate
-                            break
-                        else:
-                            # Fallback: fixed offset if sampling fails
-                            fallback = [(0.08, 0.10), (-0.06, 0.12), (0.10, -0.08), (-0.10, -0.06)]
-                            dx, dy = fallback[i % len(fallback)]
-                            xy[env_i] = disk_xy + torch.tensor([dx, dy], device=self.device)
-
-                    placed_xy.append(xy)
+                    xy = sample_nonoverlapping_xy(
+                        b, self.TABLE_HALF, forbidden, MIN_OBSTACLE_CLEARANCE, self.device
+                    )
+                    forbidden.append(xy)
                     xyz = torch.cat([xy, torch.full((b, 1), half, device=self.device)], dim=1)
                 else:
                     # Park inactive obstacles off-table so they don't interfere
                     park_x = 0.5 + i * 0.05
                     xyz = torch.tensor([[park_x, 0.0, half]], device=self.device).expand(b, 3)
-
                 pose = Pose.create_from_pq(p=xyz, q=q_id.expand(b, 4))
                 cube.set_pose(pose)
 
@@ -426,8 +395,11 @@ class PushCubeWithObstaclesEnv(PushOWithObstaclesEnv):
             self.goal_obstacle_idx[env_idx] = torch.randint(
                 len(self.obstacles), (b,), device=self.device)
 
-            # Sample goal XY across the full table (matches the planner grid ±0.30 m)
-            goal_xy = (torch.rand((b, 2), device=self.device) * 2 - 1) * self.TABLE_HALF
+            # Sample goal XY clearing all obstacles (parked ones are at x≥0.5, outside range).
+            obs_xys = [obs.pose.p[env_idx, :2] for obs in self.obstacles]
+            goal_xy = sample_nonoverlapping_xy(
+                b, self.TABLE_HALF, obs_xys, MIN_OBSTACLE_CLEARANCE, self.device
+            )
             if not hasattr(self, "goal_pos") or self.goal_pos.shape[0] != self.num_envs:
                 self.goal_pos = torch.zeros((self.num_envs, 3), device=self.device)
             self.goal_pos[env_idx] = torch.cat(
@@ -715,32 +687,28 @@ class PushOTrappedDiskEnv(PushOWithObstaclesEnv):
     PERIMETER_OFFSET: float = 0.1
 
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
-        # Initialize disk and goal positions first
         super()._initialize_episode(env_idx, options)
-        
         with torch.device(self.device):
             b = len(env_idx)
-            disk_pos = self.disk.pose.p[env_idx] # (b, 3)
+            disk_pos = self.disk.pose.p[env_idx]  # (b, 3)
             q_id = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).expand(b, 4)
-
-            # Define the 8 relative XY offsets for a square ring around the center
-            # [(-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)]
             offsets = []
             for i in [-1, 0, 1]:
                 for j in [-1, 0, 1]:
-                    if i == 0 and j == 0: continue
+                    if i == 0 and j == 0:
+                        continue
                     offsets.append((i * self.PERIMETER_OFFSET, j * self.PERIMETER_OFFSET))
-            
+            # Track all placed XYs so noise cubes avoid disk, goal, and perimeter cubes.
+            forbidden: list[torch.Tensor] = [disk_pos[:, :2], self.goal_pos[env_idx, :2]]
             for i, cube in enumerate(self.obstacles):
                 half = self.OBSTACLE_SPECS[i][0]
-                
                 if i < 8:
-                    # Place cubes in the square perimeter
                     rel_offset = torch.tensor(offsets[i], device=self.device)
                     xy = disk_pos[:, :2] + rel_offset
                 else:
-                    # Place remaining 2 cubes randomly as "noise"
-                    xy = (torch.rand((b, 2), device=self.device) * 2 - 1) * self.TABLE_HALF
-                
+                    xy = sample_nonoverlapping_xy(
+                        b, self.TABLE_HALF, forbidden, MIN_OBSTACLE_CLEARANCE, self.device
+                    )
+                forbidden.append(xy)
                 xyz = torch.cat([xy, torch.full((b, 1), half, device=self.device)], dim=1)
                 self.obstacles[i].set_pose(Pose.create_from_pq(p=xyz, q=q_id))
