@@ -27,13 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # registers PickSkillEnv
 
 from mpc_base import MPPIBase, get_ee_pos, step_env, EE_POS_ACTION_SCALE
-
-
-# Phase thresholds
-APPROACH_HEIGHT = 0.06   # hover this far above cube before descending
-XY_ALIGNED = 0.015       # XY alignment threshold to start descending
-DESCEND_Z_TRIGGER = 0.02 # how close in Z to cube before closing gripper
-LIFT_Z = 0.12            # target z for lift
+from skills.utils import PickCriteria, PickMPCStaging, check_pick_success
 
 
 class PickMPPI(MPPIBase):
@@ -72,7 +66,7 @@ def execute(
     obs: dict,
     block_idx: int,
     max_steps: int = 200,
-    success_threshold_z: float = 0.06,
+    success_threshold_z: float = PickCriteria.LIFT_THRESHOLD,
     render: bool = False,
     **kwargs,
 ) -> tuple[bool, dict]:
@@ -97,19 +91,19 @@ def execute(
         is_grasped = bool(raw.agent.is_grasping(obstacle).cpu().numpy().any())
 
         # Success check
-        if is_grasped and cube_pos[2] > success_threshold_z:
+        if check_pick_success(is_grasped, cube_pos[2]):
             return True, current_obs
 
         # State machine
         if phase == "approach":
             # Target: above the cube
             target = cube_pos.copy()
-            target[2] += APPROACH_HEIGHT
+            target[2] += PickMPCStaging.APPROACH_HEIGHT
             gripper_cmd = 1.0  # open
 
             # Transition: once XY aligned and above cube, start descending
             xy_dist = float(np.linalg.norm(ee_pos[:2] - cube_pos[:2]))
-            if xy_dist < XY_ALIGNED and ee_pos[2] > cube_pos[2] + APPROACH_HEIGHT * 0.5:
+            if xy_dist < PickMPCStaging.XY_ALIGN and ee_pos[2] > cube_pos[2] + PickMPCStaging.APPROACH_HEIGHT * 0.5:
                 phase = "descend"
                 controller.nominal[:] = 0.0  # reset nominal for new phase
 
@@ -120,7 +114,7 @@ def execute(
 
             # Transition: once EE is close to cube in Z, close gripper
             z_dist = ee_pos[2] - cube_pos[2]
-            if z_dist < DESCEND_Z_TRIGGER:
+            if z_dist < PickMPCStaging.DESCEND_Z_TRIGGER:
                 phase = "close"
                 close_steps = 0
 
@@ -138,7 +132,7 @@ def execute(
         elif phase == "lift":
             if is_grasped:
                 target = ee_pos.copy()
-                target[2] = LIFT_Z
+                target[2] = PickMPCStaging.LIFT_Z
             else:
                 # Lost grasp, try to re-descend
                 phase = "descend"
@@ -157,7 +151,7 @@ def execute(
 
     is_grasped = bool(raw.agent.is_grasping(obstacle).cpu().numpy().any())
     cube_z = float(obstacle.pose.p.cpu().numpy().reshape(-1)[2])
-    return bool(is_grasped and cube_z > success_threshold_z), current_obs
+    return check_pick_success(is_grasped, cube_z), current_obs
 
 
 class PickMPCPreviewSession:
@@ -187,17 +181,17 @@ class PickMPCPreviewSession:
 
         if self.phase == "approach":
             target = cube_pos.copy()
-            target[2] += APPROACH_HEIGHT
+            target[2] += PickMPCStaging.APPROACH_HEIGHT
             gripper_cmd = 1.0
             xy_dist = float(np.linalg.norm(ee_pos[:2] - cube_pos[:2]))
-            if xy_dist < XY_ALIGNED and ee_pos[2] > cube_pos[2] + APPROACH_HEIGHT * 0.5:
+            if xy_dist < PickMPCStaging.XY_ALIGN and ee_pos[2] > cube_pos[2] + PickMPCStaging.APPROACH_HEIGHT * 0.5:
                 self.phase = "descend"
                 controller.nominal[:] = 0.0
         elif self.phase == "descend":
             target = cube_pos.copy()
             gripper_cmd = 1.0
             z_dist = ee_pos[2] - cube_pos[2]
-            if z_dist < DESCEND_Z_TRIGGER:
+            if z_dist < PickMPCStaging.DESCEND_Z_TRIGGER:
                 self.phase = "close"
                 self.close_steps = 0
         elif self.phase == "close":
@@ -210,7 +204,7 @@ class PickMPCPreviewSession:
         elif self.phase == "lift":
             if is_grasped:
                 target = ee_pos.copy()
-                target[2] = LIFT_Z
+                target[2] = PickMPCStaging.LIFT_Z
             else:
                 self.phase = "descend"
                 target = cube_pos.copy()

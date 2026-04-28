@@ -27,13 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # registers PlaceSkillEnv
 
 from mpc_base import MPPIBase, get_ee_pos, step_env, EE_POS_ACTION_SCALE
-
-
-PLACE_THRESHOLD = 0.05
-RETREAT_DIST = 0.05
-HOVER_HEIGHT = 0.08    # hover above goal before lowering
-PLACE_HEIGHT = 0.04    # target z when placing (slightly above table)
-RETREAT_HEIGHT = 0.20  # z to retreat to after release
+from skills.utils import PlaceCriteria, PlaceMPCStaging, check_place_success
 
 
 class PlaceMPPI(MPPIBase):
@@ -96,30 +90,27 @@ def execute(
         is_grasped = bool(raw.agent.is_grasping(obstacle).cpu().numpy().any())
 
         # Full success check
-        cube_near_goal = float(np.linalg.norm(cube_pos[:2] - goal_xyz[:2])) < PLACE_THRESHOLD
-        cube_resting = cube_pos[2] < 0.05
-        ee_retreated = float(np.linalg.norm(ee_pos - cube_pos)) > RETREAT_DIST
-        if (not is_grasped) and cube_near_goal and cube_resting and ee_retreated:
+        if check_place_success(is_grasped, cube_pos, goal_xyz, ee_pos):
             return True, current_obs
 
         if phase == "carry":
             # Move above the goal position
             target = goal_xyz.copy()
-            target[2] = HOVER_HEIGHT
+            target[2] = PlaceMPCStaging.HOVER_HEIGHT
             gripper_cmd = -1.0  # closed
 
             xy_dist = float(np.linalg.norm(ee_pos[:2] - goal_xyz[:2]))
-            if xy_dist < 0.02:
+            if xy_dist < PlaceMPCStaging.CARRY_XY_TOL:
                 phase = "lower"
                 controller.nominal[:] = 0.0
 
         elif phase == "lower":
             # Descend to place height
             target = goal_xyz.copy()
-            target[2] = PLACE_HEIGHT
+            target[2] = PlaceMPCStaging.PLACE_HEIGHT
             gripper_cmd = -1.0  # closed
 
-            if ee_pos[2] < PLACE_HEIGHT + 0.02:
+            if ee_pos[2] < PlaceMPCStaging.PLACE_HEIGHT + PlaceMPCStaging.LOWER_Z_SLACK:
                 phase = "release"
                 release_steps = 0
 
@@ -136,7 +127,7 @@ def execute(
         elif phase == "retreat":
             # Move up and away
             target = ee_pos.copy()
-            target[2] = RETREAT_HEIGHT
+            target[2] = PlaceMPCStaging.RETREAT_HEIGHT
             gripper_cmd = 1.0  # open
 
         delta = controller.get_action({"ee_pos": ee_pos, "target": target})
@@ -153,10 +144,7 @@ def execute(
     ee_pos = get_ee_pos(current_obs)
     cube_pos = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
     is_grasped = bool(raw.agent.is_grasping(obstacle).cpu().numpy().any())
-    cube_near = float(np.linalg.norm(cube_pos[:2] - goal_xyz[:2])) < PLACE_THRESHOLD
-    cube_rest = cube_pos[2] < 0.05
-    ee_away = float(np.linalg.norm(ee_pos - cube_pos)) > RETREAT_DIST
-    return bool((not is_grasped) and cube_near and cube_rest and ee_away), current_obs
+    return check_place_success(is_grasped, cube_pos, goal_xyz, ee_pos), current_obs
 
 
 class PlaceMPCPreviewSession:
@@ -187,17 +175,17 @@ class PlaceMPCPreviewSession:
 
         if self.phase == "carry":
             target = goal_xyz.copy()
-            target[2] = HOVER_HEIGHT
+            target[2] = PlaceMPCStaging.HOVER_HEIGHT
             gripper_cmd = -1.0
             xy_dist = float(np.linalg.norm(ee_pos[:2] - goal_xyz[:2]))
-            if xy_dist < 0.02:
+            if xy_dist < PlaceMPCStaging.CARRY_XY_TOL:
                 self.phase = "lower"
                 controller.nominal[:] = 0.0
         elif self.phase == "lower":
             target = goal_xyz.copy()
-            target[2] = PLACE_HEIGHT
+            target[2] = PlaceMPCStaging.PLACE_HEIGHT
             gripper_cmd = -1.0
-            if ee_pos[2] < PLACE_HEIGHT + 0.02:
+            if ee_pos[2] < PlaceMPCStaging.PLACE_HEIGHT + PlaceMPCStaging.LOWER_Z_SLACK:
                 self.phase = "release"
                 self.release_steps = 0
         elif self.phase == "release":
@@ -209,7 +197,7 @@ class PlaceMPCPreviewSession:
                 controller.nominal[:] = 0.0
         elif self.phase == "retreat":
             target = ee_pos.copy()
-            target[2] = RETREAT_HEIGHT
+            target[2] = PlaceMPCStaging.RETREAT_HEIGHT
             gripper_cmd = 1.0
         else:
             target = goal_xyz.copy()

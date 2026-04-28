@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(_SKILL_DIR, "..", ".."))  # POLARIS/ for envs
 sys.path.insert(0, os.path.join(_SKILL_DIR, ".."))        # skills/ for ppo_base
 
 from ppo_base import load_agent, train  # noqa: E402
+from skills.utils import ReachCriteria
 
 
 @dataclass
@@ -128,13 +129,13 @@ def execute(
         if render:
             env.render()
         ee_pos = np.asarray(current_obs["extra"]["tcp_pose"], dtype=np.float32).reshape(-1)[:3]
-        if np.linalg.norm(ee_pos - goal_xyz) < 0.02:
+        if np.linalg.norm(ee_pos - goal_xyz) < ReachCriteria.SUCCESS_DIST:
             return True, current_obs
         if np.asarray(term).any() or np.asarray(trunc).any():
             break
 
     ee_pos = np.asarray(current_obs["extra"]["tcp_pose"], dtype=np.float32).reshape(-1)[:3]
-    return bool(np.linalg.norm(ee_pos - goal_xyz) < 0.05), current_obs
+    return bool(np.linalg.norm(ee_pos - goal_xyz) < ReachCriteria.MPC_SUCCESS_DIST), current_obs
 
 
 if __name__ == "__main__":

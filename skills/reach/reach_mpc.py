@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # registers Reach-WithObstacles-v1
 
 from mpc_base import MPPIBase, get_ee_pos, step_env, EE_POS_ACTION_SCALE
+from skills.utils import ReachCriteria
 
 
 class ReachMPPI(MPPIBase):
@@ -60,7 +61,7 @@ def execute(
     obs: dict,
     goal_xyz: np.ndarray,
     max_steps: int = 200,
-    success_threshold: float = 0.05,
+    success_threshold: float = ReachCriteria.MPC_SUCCESS_DIST,
     render: bool = False,
     **kwargs,
 ) -> tuple[bool, dict]:

@@ -15,6 +15,8 @@ from mani_skill.utils.registration import register_env
 from mani_skill.utils.scene_builder.table import TableSceneBuilder
 from mani_skill.utils.structs.pose import Pose
 
+from skills.utils import PlaceCriteria
+
 
 @register_env("PlaceSkillEnv", max_episode_steps=100)
 class PlaceSkillEnv(BaseEnv):
@@ -57,10 +59,10 @@ class PlaceSkillEnv(BaseEnv):
     goal_spawn_half_size = 0.25
 
     # Cube-to-goal XY distance for a successful place
-    place_thresh = 0.025
+    place_thresh = PlaceCriteria.TRAIN_PLACE_THRESH
 
     # EE must retreat at least this far from cube centre to count as "away"
-    retreat_dist = 0.10
+    retreat_dist = PlaceCriteria.TRAIN_RETREAT_DIST
 
     def __init__(
         self,
