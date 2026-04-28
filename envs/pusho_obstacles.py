@@ -7,6 +7,13 @@ import numpy as np
 import sapien
 import torch
 import mani_skill.envs  # noqa: F401
+from skills.utils import (
+    PickCriteria,
+    PushCubeCriteria,
+    PushOCriteria,
+    ReachCriteria,
+    circle_overlap_frac_torch,
+)
 from mani_skill.agents.robots import Panda
 from mani_skill.sensors.camera import CameraConfig
 from mani_skill.utils import sapien_utils
@@ -38,7 +45,7 @@ class PushOEnv(BaseEnv):
     SUPPORTED_ROBOTS = ["panda"]
     agent: Panda
 
-    disk_radius: float = 0.05
+    disk_radius: float = PushOCriteria.DISK_RADIUS
     disk_half_thickness: float = 0.02
     disk_mass: float = 0.3
     disk_static_friction: float = 0.8
@@ -47,14 +54,14 @@ class PushOEnv(BaseEnv):
     GOAL_HALF: float = 0.15
     DISK_SPAWN_HALF: float = 0.12
     MIN_DISK_GOAL_DIST: float = 0.08
-    SUCCESS_OVERLAP: float = 0.90
+    SUCCESS_OVERLAP: float = PushOCriteria.SUCCESS_OVERLAP
 
     def __init__(
         self,
         *args,
         robot_uids: str = "panda",
         robot_init_qpos_noise: float = 0.02,
-        disk_radius: float = 0.05,
+        disk_radius: float = PushOCriteria.DISK_RADIUS,
         disk_half_thickness: float = 0.02,
         disk_mass: float = 0.3,
         **kwargs,
@@ -140,16 +147,7 @@ class PushOEnv(BaseEnv):
             self.goal_site.set_pose(Pose.create_from_pq(p=self.goal_pos[env_idx], q=q))
 
     def _circle_overlap_frac(self, disk_xy: torch.Tensor, goal_xy: torch.Tensor) -> torch.Tensor:
-        r = self.disk_radius
-        d = torch.norm(disk_xy - goal_xy, dim=-1).clamp(min=0.0)
-        d_safe  = d.clamp(max=2.0 * r - 1e-6)
-        cos_arg = (d_safe / (2.0 * r)).clamp(-1.0 + 1e-7, 1.0 - 1e-7)
-        A = (
-            2.0 * r * r * torch.acos(cos_arg)
-            - 0.5 * d_safe * torch.sqrt((4.0 * r * r - d_safe * d_safe).clamp(min=0.0))
-        )
-        frac = (A / (torch.pi * r * r)).clamp(0.0, 1.0)
-        return torch.where(d >= 2.0 * r, torch.zeros_like(frac), frac)
+        return circle_overlap_frac_torch(disk_xy, goal_xy, self.disk_radius)
 
     def evaluate(self) -> Dict[str, Any]:
         disk_xy = self.disk.pose.p[:, :2]
@@ -318,7 +316,7 @@ class ReachWithObstaclesEnv(PushOWithObstaclesEnv):
     Success: EE within 2 cm of goal.
     """
 
-    def __init__(self, *args, success_threshold: float = 0.02, **kwargs):
+    def __init__(self, *args, success_threshold: float = ReachCriteria.SUCCESS_DIST, **kwargs):
         self.success_threshold = success_threshold
         super().__init__(*args, **kwargs)
 
@@ -383,7 +381,7 @@ class PushCubeWithObstaclesEnv(PushOWithObstaclesEnv):
     Success: goal cube XY within 5 cm of goal XY.
     """
 
-    GOAL_THRESHOLD = 0.05
+    GOAL_THRESHOLD = PushCubeCriteria.GOAL_THRESHOLD
 
     def _load_scene(self, options: dict):
         super()._load_scene(options)
@@ -578,9 +576,8 @@ class PickSkillEnv(PushOWithObstaclesEnv):
     Success: is_grasped AND pick_cube_pos z > lift_threshold.
     """
 
-    # Absolute z height (cube centre) that counts as lifted off the table.
-    # Obstacle half-sizes range 0.015–0.025, so 0.06 requires ~3–4 cm of lift.
-    lift_threshold = 0.06
+    # Obstacle half-sizes range 0.015–0.025, so LIFT_THRESHOLD requires ~3–4 cm of lift.
+    lift_threshold = PickCriteria.LIFT_THRESHOLD
 
     def _load_scene(self, options: dict):
         super()._load_scene(options)

@@ -41,16 +41,7 @@ sys.path.insert(0, os.path.join(_SKILL_DIR, "..", ".."))  # POLARIS/ for envs
 sys.path.insert(0, os.path.join(_SKILL_DIR, ".."))        # skills/ for ppo_base
 
 from ppo_base import load_agent, train  # noqa: E402
-
-
-def _circle_overlap_frac_np(disk_xy: np.ndarray, goal_xy: np.ndarray, r: float) -> float:
-    """Numpy scalar version of PushOEnv._circle_overlap_frac."""
-    d = float(np.linalg.norm(disk_xy - goal_xy))
-    if d >= 2.0 * r:
-        return 0.0
-    cos_arg = np.clip(d / (2.0 * r), -1.0 + 1e-7, 1.0 - 1e-7)
-    A = 2.0 * r * r * np.arccos(cos_arg) - 0.5 * d * np.sqrt(max(4.0 * r * r - d * d, 0.0))
-    return float(np.clip(A / (np.pi * r * r), 0.0, 1.0))
+from skills.utils import PushOCriteria, circle_overlap_frac, check_push_o_success
 
 
 @dataclass
@@ -120,7 +111,7 @@ def _build_flat_obs(obs: dict, raw_env, goal_xyz: np.ndarray) -> np.ndarray:
     goal     = goal_xyz.astype(np.float32).reshape(3)
 
     r       = float(raw_env.disk_radius)
-    overlap = _circle_overlap_frac_np(disk_pos[:2], goal[:2], r)
+    overlap = circle_overlap_frac(disk_pos[:2], goal[:2], r)
 
     tcp_pose = np.asarray(obs["extra"]["tcp_pose"], dtype=np.float32).reshape(-1)
     obj_pose = np.asarray(obs["extra"]["obj_pose"], dtype=np.float32).reshape(-1)
@@ -171,8 +162,6 @@ def execute(
     action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
     action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
 
-    SUCCESS_OVERLAP = 0.80
-
     current_obs = obs
     for _ in range(max_steps):
         flat  = _build_flat_obs(current_obs, raw, goal_xyz)
@@ -186,15 +175,13 @@ def execute(
             env.render()
 
         disk_pos = raw.disk.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
-        overlap  = _circle_overlap_frac_np(disk_pos[:2], goal_xyz[:2], float(raw.disk_radius))
-        if overlap >= SUCCESS_OVERLAP:
+        if check_push_o_success(disk_pos[:2], goal_xyz[:2], float(raw.disk_radius)):
             return True, current_obs
         if np.asarray(term).any() or np.asarray(trunc).any():
             break
 
     disk_pos = raw.disk.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
-    overlap  = _circle_overlap_frac_np(disk_pos[:2], goal_xyz[:2], float(raw.disk_radius))
-    return overlap >= SUCCESS_OVERLAP, current_obs
+    return check_push_o_success(disk_pos[:2], goal_xyz[:2], float(raw.disk_radius)), current_obs
 
 
 if __name__ == "__main__":

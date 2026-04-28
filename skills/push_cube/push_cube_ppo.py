@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(_SKILL_DIR, "..", ".."))  # POLARIS/ for envs
 sys.path.insert(0, os.path.join(_SKILL_DIR, ".."))        # skills/ for ppo_base
 
 from ppo_base import load_agent, train  # noqa: E402
+from skills.utils import PushCubeCriteria, check_push_cube_success
 
 
 @dataclass
@@ -116,8 +117,6 @@ def execute(
     raw      = env.unwrapped
     obstacle = raw.obstacles[block_idx]
 
-    GOAL_THRESHOLD = 0.05
-
     if agent is None:
         agent = load_agent(checkpoint, device)
     action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
@@ -133,13 +132,13 @@ def execute(
         if render:
             env.render()
         cube_pos = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
-        if float(np.linalg.norm(cube_pos[:2] - goal_xyz[:2])) < GOAL_THRESHOLD:
+        if check_push_cube_success(cube_pos[:2], goal_xyz[:2]):
             return True, current_obs
         if np.asarray(term).any() or np.asarray(trunc).any():
             break
 
     cube_pos = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
-    return bool(np.linalg.norm(cube_pos[:2] - goal_xyz[:2]) < GOAL_THRESHOLD), current_obs
+    return check_push_cube_success(cube_pos[:2], goal_xyz[:2]), current_obs
 
 
 if __name__ == "__main__":

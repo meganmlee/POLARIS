@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.join(_SKILL_DIR, "..", ".."))  # POLARIS/ for envs
 sys.path.insert(0, os.path.join(_SKILL_DIR, ".."))        # skills/ for ppo_base
 
 from ppo_base import load_agent, train  # noqa: E402
+from skills.utils import PickCriteria, check_pick_success
 
 
 @dataclass
@@ -126,7 +127,6 @@ def execute(
     action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
     action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
 
-    LIFT_THRESHOLD = 0.06
     current_obs = obs
     for _ in range(max_steps):
         flat  = _build_pick_obs(current_obs, raw, obstacle)
@@ -138,14 +138,14 @@ def execute(
             env.render()
         is_grasped = bool(raw.agent.is_grasping(obstacle).cpu().numpy().any())
         cube_z     = float(obstacle.pose.p.cpu().numpy().reshape(-1)[2])
-        if is_grasped and cube_z > LIFT_THRESHOLD:
+        if check_pick_success(is_grasped, cube_z):
             return True, current_obs
         if np.asarray(term).any() or np.asarray(trunc).any():
             break
 
     is_grasped = bool(raw.agent.is_grasping(obstacle).cpu().numpy().any())
     cube_z     = float(obstacle.pose.p.cpu().numpy().reshape(-1)[2])
-    return bool(is_grasped and cube_z > LIFT_THRESHOLD), current_obs
+    return check_pick_success(is_grasped, cube_z), current_obs
 
 
 if __name__ == "__main__":

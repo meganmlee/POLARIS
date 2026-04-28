@@ -53,6 +53,7 @@ import gymnasium as gym
 from planning_wrapper.adapters import PushOTaskAdapter
 from planning_wrapper.wrappers.maniskill_planning import ManiSkillPlanningWrapper
 from mpc_base import get_ee_pos
+from skills.utils import PlaceCriteria, ReachCriteria
 from skills.metrics import (
     lookahead_reach_mppi_score,
     lookahead_rl_score,
@@ -317,7 +318,7 @@ def run(
                     np.asarray(obs["extra"]["tcp_pose"], dtype=np.float32).reshape(-1)[2]
                 )
                 x, y = region_to_xy(region)
-                goal_xyz = np.array([x, y, max(ee_z, 0.10)], dtype=np.float32)
+                goal_xyz = np.array([x, y, max(ee_z, ReachCriteria.MIN_EE_Z)], dtype=np.float32)
                 print(f"    → reach {np.round(goal_xyz, 3)}")
 
                 if skill == "auto":
@@ -430,7 +431,7 @@ def run(
                         skill_agents["place"] = load_agent(place_checkpoint, dev)
 
                 px, py = region_to_xy(region)
-                goal_xyz = np.array([px, py, 0.02], dtype=np.float32)
+                goal_xyz = np.array([px, py, PlaceCriteria.GOAL_PLACE_Z], dtype=np.float32)
                 print(f"    → place cube{block_idx} at {np.round(goal_xyz, 3)}")
                 success = False
                 force_mpc_place = skill == "auto" and place_fail_counts.get(block_idx, 0) >= 1

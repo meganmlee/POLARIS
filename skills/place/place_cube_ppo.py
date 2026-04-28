@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.join(_SKILL_DIR, "..", ".."))  # POLARIS/ for envs
 sys.path.insert(0, os.path.join(_SKILL_DIR, ".."))        # skills/ for ppo_base
 
 from ppo_base import load_agent, train  # noqa: E402
+from skills.utils import check_place_success
 
 
 @dataclass
@@ -132,23 +133,16 @@ def execute(
     raw      = env.unwrapped
     obstacle = raw.obstacles[block_idx]
 
-    PLACE_THRESH  = 0.05
-    RETREAT_DIST  = 0.05
-    REST_Z_THRESH = 0.05
-
     if agent is None:
         agent = load_agent(checkpoint, device)
     action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
     action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
 
     def _check_success():
-        is_grasped   = bool(raw.agent.is_grasping(obstacle).cpu().numpy().any())
-        obj_pos      = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
-        tcp_pos      = raw.agent.tcp_pose.p.cpu().numpy().reshape(-1).astype(np.float32)
-        obj_to_goal  = float(np.linalg.norm(obj_pos[:2] - goal_xyz[:2]))
-        is_placed    = (not is_grasped) and (obj_to_goal < PLACE_THRESH) and (obj_pos[2] < REST_Z_THRESH)
-        is_retreated = float(np.linalg.norm(tcp_pos - obj_pos)) > RETREAT_DIST
-        return bool(is_placed and is_retreated)
+        is_grasped = bool(raw.agent.is_grasping(obstacle).cpu().numpy().any())
+        obj_pos    = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
+        tcp_pos    = raw.agent.tcp_pose.p.cpu().numpy().reshape(-1).astype(np.float32)
+        return check_place_success(is_grasped, obj_pos, goal_xyz, tcp_pos)
 
     # Bail out immediately if the robot isn't holding the cube — nothing to place.
     if not bool(raw.agent.is_grasping(obstacle).cpu().numpy().any()):

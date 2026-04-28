@@ -25,21 +25,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # registers PushCube-WithObstacles-v1
 
 from mpc_base import MPPIBase, get_ee_pos, step_env, EE_POS_ACTION_SCALE
-
-
-# Staging: line EE up behind the cube (opposite goal), approaching from above
-# to avoid knocking the cube while moving into position.
-STAGE_OFFSET = 0.05      # m behind cube (along -push_dir)
-STAGE_HIGH_Z = 0.15      # travel height while repositioning in XY
-PUSH_Z = 0.03            # push at cube centre height (cube half_size ~0.02)
-STAGE_XY_ALIGN = 0.015   # m — switch from hover to descend when XY aligned
-STAGE_ALIGN_DIST = 0.02  # m — switch to push when fully at stage target
+from skills.utils import PushCubeCriteria, PushCubeMPCStaging, check_push_cube_success
 
 
 class PushCubeMPPI(MPPIBase):
     """MPPI controller for pushing a cube to a goal XY position."""
 
-    def __init__(self, goal_xyz: np.ndarray, contact_radius: float = 0.04, **kwargs):
+    def __init__(self, goal_xyz: np.ndarray, contact_radius: float = PushCubeCriteria.CONTACT_RADIUS, **kwargs):
         kwargs.setdefault("horizon", 10)
         kwargs.setdefault("num_samples", 512)
         kwargs.setdefault("noise_std", 0.4)
@@ -93,7 +85,6 @@ def execute(
     block_idx: int,
     goal_xyz: np.ndarray,
     max_steps: int = 200,
-    success_threshold: float = 0.05,
     render: bool = False,
     **kwargs,
 ) -> tuple[bool, dict]:
@@ -113,34 +104,34 @@ def execute(
         ee_pos = get_ee_pos(current_obs)
         cube_pos = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
 
-        if float(np.linalg.norm(cube_pos[:2] - goal_xyz[:2])) < success_threshold:
+        if check_push_cube_success(cube_pos[:2], goal_xyz[:2]):
             return True, current_obs
 
         push_vec = goal_xyz[:2] - cube_pos[:2]
         push_dir = push_vec / (np.linalg.norm(push_vec) + 1e-6)
-        stage_xy = cube_pos[:2] - push_dir * STAGE_OFFSET
+        stage_xy = cube_pos[:2] - push_dir * PushCubeMPCStaging.STAGE_OFFSET
 
         if phase == "hover":
             # Travel at safe height to staging XY (avoids knocking the cube).
-            target = np.array([stage_xy[0], stage_xy[1], STAGE_HIGH_Z], dtype=np.float32)
+            target = np.array([stage_xy[0], stage_xy[1], PushCubeMPCStaging.STAGE_HIGH_Z], dtype=np.float32)
             diff = target - ee_pos
             delta = np.clip(diff / EE_POS_ACTION_SCALE, -1.0, 1.0).astype(np.float32)
 
-            if float(np.linalg.norm(ee_pos[:2] - stage_xy)) < STAGE_XY_ALIGN:
+            if float(np.linalg.norm(ee_pos[:2] - stage_xy)) < PushCubeMPCStaging.STAGE_XY_ALIGN:
                 phase = "descend"
 
         elif phase == "descend":
             # Drop down to push height at the staging XY.
-            target = np.array([stage_xy[0], stage_xy[1], PUSH_Z], dtype=np.float32)
+            target = np.array([stage_xy[0], stage_xy[1], PushCubeMPCStaging.PUSH_Z], dtype=np.float32)
             diff = target - ee_pos
             delta = np.clip(diff / EE_POS_ACTION_SCALE, -1.0, 1.0).astype(np.float32)
 
-            if float(np.linalg.norm(ee_pos - target)) < STAGE_ALIGN_DIST:
+            if float(np.linalg.norm(ee_pos - target)) < PushCubeMPCStaging.STAGE_ALIGN_DIST:
                 phase = "push"
                 controller.nominal[:] = 0.0
 
         else:  # push — drive EE toward goal at push height; cube rides along in contact
-            target = np.array([goal_xyz[0], goal_xyz[1], PUSH_Z], dtype=np.float32)
+            target = np.array([goal_xyz[0], goal_xyz[1], PushCubeMPCStaging.PUSH_Z], dtype=np.float32)
             delta = controller.get_action({"ee_pos": ee_pos, "cube_pos": cube_pos, "target": target})
 
         action = np.zeros(act_dim, dtype=np.float32)
@@ -150,7 +141,7 @@ def execute(
             break
 
     cube_pos = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
-    return bool(np.linalg.norm(cube_pos[:2] - goal_xyz[:2]) < success_threshold), current_obs
+    return check_push_cube_success(cube_pos[:2], goal_xyz[:2]), current_obs
 
 
 class PushCubeMPCPreviewSession:
@@ -176,23 +167,23 @@ class PushCubeMPCPreviewSession:
         cube_pos = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
         push_vec = goal_xyz[:2] - cube_pos[:2]
         push_dir = push_vec / (np.linalg.norm(push_vec) + 1e-6)
-        stage_xy = cube_pos[:2] - push_dir * STAGE_OFFSET
+        stage_xy = cube_pos[:2] - push_dir * PushCubeMPCStaging.STAGE_OFFSET
 
         if self.phase == "hover":
-            target = np.array([stage_xy[0], stage_xy[1], STAGE_HIGH_Z], dtype=np.float32)
+            target = np.array([stage_xy[0], stage_xy[1], PushCubeMPCStaging.STAGE_HIGH_Z], dtype=np.float32)
             diff = target - ee_pos
             delta = np.clip(diff / EE_POS_ACTION_SCALE, -1.0, 1.0).astype(np.float32)
-            if float(np.linalg.norm(ee_pos[:2] - stage_xy)) < STAGE_XY_ALIGN:
+            if float(np.linalg.norm(ee_pos[:2] - stage_xy)) < PushCubeMPCStaging.STAGE_XY_ALIGN:
                 self.phase = "descend"
         elif self.phase == "descend":
-            target = np.array([stage_xy[0], stage_xy[1], PUSH_Z], dtype=np.float32)
+            target = np.array([stage_xy[0], stage_xy[1], PushCubeMPCStaging.PUSH_Z], dtype=np.float32)
             diff = target - ee_pos
             delta = np.clip(diff / EE_POS_ACTION_SCALE, -1.0, 1.0).astype(np.float32)
-            if float(np.linalg.norm(ee_pos - target)) < STAGE_ALIGN_DIST:
+            if float(np.linalg.norm(ee_pos - target)) < PushCubeMPCStaging.STAGE_ALIGN_DIST:
                 self.phase = "push"
                 self.controller.nominal[:] = 0.0
         else:
-            target = np.array([goal_xyz[0], goal_xyz[1], PUSH_Z], dtype=np.float32)
+            target = np.array([goal_xyz[0], goal_xyz[1], PushCubeMPCStaging.PUSH_Z], dtype=np.float32)
             delta = self.controller.get_action({"ee_pos": ee_pos, "cube_pos": cube_pos, "target": target})
 
         action = np.zeros(self.act_dim, dtype=np.float32)
