@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(_SKILL_DIR, "..", ".."))  # POLARIS/ for envs
 sys.path.insert(0, os.path.join(_SKILL_DIR, ".."))        # skills/ for ppo_base
 
 from ppo_base import load_agent, train  # noqa: E402
-from skills.utils import ReachCriteria
+from skills.utils import ReachCriteria, log_skill_failure
 
 
 @dataclass
@@ -119,6 +119,7 @@ def execute(
     action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
     action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
 
+    _exit_reason = f"max_steps ({max_steps}) exceeded"
     current_obs = obs
     for _ in range(max_steps):
         flat  = _build_flat_obs(current_obs, goal_xyz)
@@ -132,10 +133,14 @@ def execute(
         if np.linalg.norm(ee_pos - goal_xyz) < ReachCriteria.SUCCESS_DIST:
             return True, current_obs
         if np.asarray(term).any() or np.asarray(trunc).any():
+            _exit_reason = "episode terminated early"
             break
 
     ee_pos = np.asarray(current_obs["extra"]["tcp_pose"], dtype=np.float32).reshape(-1)[:3]
-    return bool(np.linalg.norm(ee_pos - goal_xyz) < ReachCriteria.MPC_SUCCESS_DIST), current_obs
+    success = bool(np.linalg.norm(ee_pos - goal_xyz) < ReachCriteria.MPC_SUCCESS_DIST)
+    if not success:
+        log_skill_failure("Reach", _exit_reason)
+    return success, current_obs
 
 
 if __name__ == "__main__":

@@ -13,6 +13,19 @@ import numpy as np
 
 
 # ===========================================================================
+# Skill failure diagnostics
+# ===========================================================================
+
+DEBUG_SKILL_FAILURES: bool = True
+
+
+def log_skill_failure(skill: str, reason: str, controller: str = "PPO") -> None:
+    """Print a failure diagnostic when DEBUG_SKILL_FAILURES is enabled."""
+    if DEBUG_SKILL_FAILURES:
+        print(f"[FAIL] {controller} {skill} failed: {reason}")
+
+
+# ===========================================================================
 # Reach
 # ===========================================================================
 

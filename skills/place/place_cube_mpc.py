@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # registers PlaceSkillEnv
 
 from mpc_base import MPPIBase, get_ee_pos, step_env, EE_POS_ACTION_SCALE
-from skills.utils import PlaceCriteria, PlaceMPCStaging, check_place_success
+from skills.utils import PlaceCriteria, PlaceMPCStaging, check_place_success, log_skill_failure
 
 
 class PlaceMPPI(MPPIBase):
@@ -83,6 +83,7 @@ def execute(
 
     phase = "carry"  # carry -> lower -> release -> retreat
     release_steps = 0
+    _exit_reason = f"max_steps ({max_steps}) exceeded"
 
     for step in range(max_steps):
         ee_pos = get_ee_pos(current_obs)
@@ -138,13 +139,17 @@ def execute(
 
         current_obs, done = step_env(env, action, render)
         if done:
+            _exit_reason = "episode terminated early"
             break
 
     # Final success check
     ee_pos = get_ee_pos(current_obs)
     cube_pos = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
     is_grasped = bool(raw.agent.is_grasping(obstacle).cpu().numpy().any())
-    return check_place_success(is_grasped, cube_pos, goal_xyz, ee_pos), current_obs
+    success = check_place_success(is_grasped, cube_pos, goal_xyz, ee_pos)
+    if not success:
+        log_skill_failure("Place", _exit_reason, controller="MPC")
+    return success, current_obs
 
 
 class PlaceMPCPreviewSession:

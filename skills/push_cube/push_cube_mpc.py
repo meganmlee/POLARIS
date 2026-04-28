@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # registers PushCube-WithObstacles-v1
 
 from mpc_base import MPPIBase, get_ee_pos, step_env, EE_POS_ACTION_SCALE
-from skills.utils import PushCubeCriteria, PushCubeMPCStaging, check_push_cube_success
+from skills.utils import PushCubeCriteria, PushCubeMPCStaging, check_push_cube_success, log_skill_failure
 
 
 class PushCubeMPPI(MPPIBase):
@@ -99,6 +99,7 @@ def execute(
     current_obs = obs
 
     phase = "hover"  # hover -> descend -> push
+    _exit_reason = f"max_steps ({max_steps}) exceeded"
 
     for _ in range(max_steps):
         ee_pos = get_ee_pos(current_obs)
@@ -138,10 +139,14 @@ def execute(
         action[:3] = delta
         current_obs, done = step_env(env, action, render)
         if done:
+            _exit_reason = "episode terminated early"
             break
 
     cube_pos = obstacle.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
-    return check_push_cube_success(cube_pos[:2], goal_xyz[:2]), current_obs
+    success = check_push_cube_success(cube_pos[:2], goal_xyz[:2])
+    if not success:
+        log_skill_failure("PushCube", _exit_reason, controller="MPC")
+    return success, current_obs
 
 
 class PushCubeMPCPreviewSession:

@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # noqa: F401 — registers PushO-v1
 
 from mpc_base import MPPIBase, get_ee_pos, step_env, EE_POS_ACTION_SCALE
-from skills.utils import PushOCriteria, PushOMPCStaging, circle_overlap_frac, check_push_o_success
+from skills.utils import PushOCriteria, PushOMPCStaging, circle_overlap_frac, check_push_o_success, log_skill_failure
 
 
 class PushOMPPI(MPPIBase):
@@ -99,6 +99,7 @@ def execute(
     current_obs = obs
 
     phase = "hover"  # hover -> descend -> push
+    _exit_reason = f"max_steps ({max_steps}) exceeded"
 
     for _ in range(max_steps):
         ee_pos   = get_ee_pos(current_obs)
@@ -146,10 +147,14 @@ def execute(
             return True, current_obs
 
         if done:
+            _exit_reason = "episode terminated early"
             break
 
     disk_pos = raw.disk.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
-    return check_push_o_success(disk_pos[:2], goal_xyz[:2], r), current_obs
+    success = check_push_o_success(disk_pos[:2], goal_xyz[:2], r)
+    if not success:
+        log_skill_failure("PushO", _exit_reason, controller="MPC")
+    return success, current_obs
 
 
 class PushOMPCPreviewSession:

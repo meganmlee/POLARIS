@@ -41,7 +41,7 @@ sys.path.insert(0, os.path.join(_SKILL_DIR, "..", ".."))  # POLARIS/ for envs
 sys.path.insert(0, os.path.join(_SKILL_DIR, ".."))        # skills/ for ppo_base
 
 from ppo_base import load_agent, train  # noqa: E402
-from skills.utils import PushOCriteria, circle_overlap_frac, check_push_o_success
+from skills.utils import PushOCriteria, circle_overlap_frac, check_push_o_success, log_skill_failure
 
 
 @dataclass
@@ -162,6 +162,7 @@ def execute(
     action_low  = torch.from_numpy(env.action_space.low.reshape(-1)).to(device)
     action_high = torch.from_numpy(env.action_space.high.reshape(-1)).to(device)
 
+    _exit_reason = f"max_steps ({max_steps}) exceeded"
     current_obs = obs
     for _ in range(max_steps):
         flat  = _build_flat_obs(current_obs, raw, goal_xyz)
@@ -178,10 +179,14 @@ def execute(
         if check_push_o_success(disk_pos[:2], goal_xyz[:2], float(raw.disk_radius)):
             return True, current_obs
         if np.asarray(term).any() or np.asarray(trunc).any():
+            _exit_reason = "episode terminated early"
             break
 
     disk_pos = raw.disk.pose.p.cpu().numpy().reshape(-1).astype(np.float32)
-    return check_push_o_success(disk_pos[:2], goal_xyz[:2], float(raw.disk_radius)), current_obs
+    success = check_push_o_success(disk_pos[:2], goal_xyz[:2], float(raw.disk_radius))
+    if not success:
+        log_skill_failure("PushO", _exit_reason)
+    return success, current_obs
 
 
 if __name__ == "__main__":

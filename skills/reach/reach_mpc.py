@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # registers Reach-WithObstacles-v1
 
 from mpc_base import MPPIBase, get_ee_pos, step_env, EE_POS_ACTION_SCALE
-from skills.utils import ReachCriteria
+from skills.utils import ReachCriteria, log_skill_failure
 
 
 class ReachMPPI(MPPIBase):
@@ -72,6 +72,7 @@ def execute(
     controller = ReachMPPI(goal_xyz=goal_xyz, **kwargs)
     act_dim = env.action_space.shape[0]
     current_obs = obs
+    _exit_reason = f"max_steps ({max_steps}) exceeded"
 
     for _ in range(max_steps):
         ee_pos = get_ee_pos(current_obs)
@@ -83,10 +84,14 @@ def execute(
         action[:3] = delta
         current_obs, done = step_env(env, action, render)
         if done:
+            _exit_reason = "episode terminated early"
             break
 
     final_ee = get_ee_pos(current_obs)
-    return bool(np.linalg.norm(final_ee - goal_xyz) < success_threshold), current_obs
+    success = bool(np.linalg.norm(final_ee - goal_xyz) < success_threshold)
+    if not success:
+        log_skill_failure("Reach", _exit_reason, controller="MPC")
+    return success, current_obs
 
 
 # ---------------------------------------------------------------------------

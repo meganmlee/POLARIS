@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import envs  # registers PickSkillEnv
 
 from mpc_base import MPPIBase, get_ee_pos, step_env, EE_POS_ACTION_SCALE
-from skills.utils import PickCriteria, PickMPCStaging, check_pick_success
+from skills.utils import PickCriteria, PickMPCStaging, check_pick_success, log_skill_failure
 
 
 class PickMPPI(MPPIBase):
@@ -84,6 +84,7 @@ def execute(
 
     # After gripper close command, wait this many steps before checking grasp
     close_steps = 0
+    _exit_reason = f"max_steps ({max_steps}) exceeded"
 
     for step in range(max_steps):
         ee_pos = get_ee_pos(current_obs)
@@ -147,11 +148,15 @@ def execute(
 
         current_obs, done = step_env(env, action, render)
         if done:
+            _exit_reason = "episode terminated early"
             break
 
     is_grasped = bool(raw.agent.is_grasping(obstacle).cpu().numpy().any())
     cube_z = float(obstacle.pose.p.cpu().numpy().reshape(-1)[2])
-    return check_pick_success(is_grasped, cube_z), current_obs
+    success = check_pick_success(is_grasped, cube_z)
+    if not success:
+        log_skill_failure("Pick", _exit_reason, controller="MPC")
+    return success, current_obs
 
 
 class PickMPCPreviewSession:

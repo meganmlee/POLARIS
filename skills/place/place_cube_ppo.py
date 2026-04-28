@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.join(_SKILL_DIR, "..", ".."))  # POLARIS/ for envs
 sys.path.insert(0, os.path.join(_SKILL_DIR, ".."))        # skills/ for ppo_base
 
 from ppo_base import load_agent, train  # noqa: E402
-from skills.utils import check_place_success
+from skills.utils import check_place_success, log_skill_failure
 
 
 @dataclass
@@ -146,8 +146,10 @@ def execute(
 
     # Bail out immediately if the robot isn't holding the cube — nothing to place.
     if not bool(raw.agent.is_grasping(obstacle).cpu().numpy().any()):
+        log_skill_failure("Place", "robot is not holding the cube")
         return False, obs
 
+    _exit_reason = f"max_steps ({max_steps}) exceeded"
     current_obs = obs
     for _ in range(max_steps):
         flat  = _build_place_obs(current_obs, raw, obstacle, goal_xyz)
@@ -160,9 +162,13 @@ def execute(
         if _check_success():
             return True, current_obs
         if np.asarray(term).any() or np.asarray(trunc).any():
+            _exit_reason = "episode terminated early"
             break
 
-    return _check_success(), current_obs
+    success = _check_success()
+    if not success:
+        log_skill_failure("Place", _exit_reason)
+    return success, current_obs
 
 
 if __name__ == "__main__":
